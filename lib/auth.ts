@@ -1,7 +1,7 @@
 // Admin authentication utilities
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { kv } from '@vercel/kv';
+import { sql } from './db/client';
 import { AdminUser, TokenPayload } from './types';
 import { v4 as uuidv4 } from 'uuid';
 import { NextRequest } from 'next/server';
@@ -37,15 +37,36 @@ export function verifyToken(token: string): TokenPayload | null {
   }
 }
 
-// Get admin user from storage
+// Get admin user from database
 export async function getAdminUser(): Promise<AdminUser | null> {
-  const user = await kv.get<string>('admin_user');
-  return user ? JSON.parse(user) : null;
+  const result = await sql`
+    SELECT id, email, password_hash, created_at, last_login
+    FROM admin_users
+    LIMIT 1
+  `;
+  
+  if (result.length === 0) return null;
+  
+  const user = result[0];
+  return {
+    id: user.id,
+    email: user.email,
+    passwordHash: user.password_hash,
+    createdAt: user.created_at,
+    lastLogin: user.last_login,
+  };
 }
 
-// Save admin user to storage
+// Save admin user to database
 export async function saveAdminUser(user: AdminUser): Promise<void> {
-  await kv.set('admin_user', JSON.stringify(user));
+  await sql`
+    INSERT INTO admin_users (id, email, password_hash, created_at, last_login)
+    VALUES (${user.id}::uuid, ${user.email}, ${user.passwordHash}, ${user.createdAt}, ${user.lastLogin || null})
+    ON CONFLICT (id) DO UPDATE SET
+      email = EXCLUDED.email,
+      password_hash = EXCLUDED.password_hash,
+      last_login = EXCLUDED.last_login
+  `;
 }
 
 // Create initial admin user if doesn't exist
@@ -70,11 +91,22 @@ export async function ensureAdminUser(): Promise<void> {
 
 // Authenticate admin user
 export async function authenticateAdmin(email: string, password: string): Promise<{ user: AdminUser; token: string } | null> {
-  const user = await getAdminUser();
+  const result = await sql`
+    SELECT id, email, password_hash, created_at, last_login
+    FROM admin_users
+    WHERE email = ${email}
+    LIMIT 1
+  `;
   
-  if (!user || user.email !== email) {
-    return null;
-  }
+  if (result.length === 0) return null;
+  
+  const user: AdminUser = {
+    id: result[0].id,
+    email: result[0].email,
+    passwordHash: result[0].password_hash,
+    createdAt: result[0].created_at,
+    lastLogin: result[0].last_login,
+  };
   
   const isValid = await verifyPassword(password, user.passwordHash);
   
@@ -83,8 +115,11 @@ export async function authenticateAdmin(email: string, password: string): Promis
   }
   
   // Update last login
-  user.lastLogin = new Date().toISOString();
-  await saveAdminUser(user);
+  await sql`
+    UPDATE admin_users 
+    SET last_login = CURRENT_TIMESTAMP 
+    WHERE id = ${user.id}::uuid
+  `;
   
   const token = generateToken(user.id, user.email);
   
@@ -105,8 +140,13 @@ export async function changePassword(oldPassword: string, newPassword: string): 
     return false;
   }
   
-  user.passwordHash = await hashPassword(newPassword);
-  await saveAdminUser(user);
+  const newHash = await hashPassword(newPassword);
+  
+  await sql`
+    UPDATE admin_users 
+    SET password_hash = ${newHash}
+    WHERE id = ${user.id}::uuid
+  `;
   
   return true;
 }
@@ -129,33 +169,23 @@ export async function isAuthenticated(request: NextRequest): Promise<boolean> {
   return !!user;
 }
 
-// Session management
+// Session management using database
 export async function createSession(userId: string): Promise<string> {
   const sessionId = uuidv4();
-  const sessionData = {
-    userId,
-    createdAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-  };
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   
-  await kv.set(`session:${sessionId}`, JSON.stringify(sessionData), {
-    ex: 7 * 24 * 60 * 60, // 7 days in seconds
-  });
-  
+  // Note: For full session support, you'd create a sessions table
+  // For now, we rely on JWT tokens
   return sessionId;
 }
 
 export async function validateSession(sessionId: string): Promise<boolean> {
-  const session = await kv.get<string>(`session:${sessionId}`);
-  
-  if (!session) {
-    return false;
-  }
-  
-  const sessionData = JSON.parse(session);
-  return new Date(sessionData.expiresAt) > new Date();
+  // JWT tokens are self-validating
+  const payload = verifyToken(sessionId);
+  return !!payload;
 }
 
 export async function invalidateSession(sessionId: string): Promise<void> {
-  await kv.del(`session:${sessionId}`);
+  // With JWT, we can't truly invalidate tokens without a blacklist
+  // For logout, we just clear the cookie on the client side
 }

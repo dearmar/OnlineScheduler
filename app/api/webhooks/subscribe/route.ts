@@ -1,6 +1,6 @@
 // POST /api/webhooks/subscribe - Subscribe to webhook notifications
 import { NextRequest, NextResponse } from 'next/server';
-import { kv } from '@vercel/kv';
+import { sql } from '@/lib/db/client';
 import { isAuthenticated } from '@/lib/auth';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -24,13 +24,21 @@ export async function GET(request: NextRequest) {
     //   );
     // }
     
-    const subscriptions = await kv.get<string>('webhook_subscriptions');
-    const parsed: WebhookSubscription[] = subscriptions ? JSON.parse(subscriptions) : [];
+    const result = await sql`
+      SELECT id, url, events, secret, created_at, is_active as active
+      FROM webhook_subscriptions
+      WHERE is_active = true
+      ORDER BY created_at DESC
+    `;
     
     // Hide secrets in response
-    const safeSubscriptions = parsed.map(sub => ({
-      ...sub,
+    const safeSubscriptions = result.map(sub => ({
+      id: sub.id,
+      url: sub.url,
+      events: sub.events,
       secret: '********',
+      createdAt: sub.created_at,
+      active: sub.active,
     }));
     
     return NextResponse.json({
@@ -83,24 +91,27 @@ export async function POST(request: NextRequest) {
       : validEvents;
     
     // Generate subscription
-    const subscription: WebhookSubscription = {
-      id: uuidv4(),
-      url,
-      events: subscribedEvents,
-      secret: uuidv4().replace(/-/g, ''),
-      createdAt: new Date().toISOString(),
-      active: true,
-    };
+    const id = uuidv4();
+    const secret = uuidv4().replace(/-/g, '');
     
-    // Save subscription
-    const existingRaw = await kv.get<string>('webhook_subscriptions');
-    const existing: WebhookSubscription[] = existingRaw ? JSON.parse(existingRaw) : [];
-    existing.push(subscription);
-    await kv.set('webhook_subscriptions', JSON.stringify(existing));
+    const result = await sql`
+      INSERT INTO webhook_subscriptions (id, url, events, secret, is_active)
+      VALUES (${id}::uuid, ${url}, ${subscribedEvents}, ${secret}, true)
+      RETURNING id, url, events, secret, created_at, is_active as active
+    `;
+    
+    const subscription = result[0];
     
     return NextResponse.json({
       success: true,
-      data: subscription,
+      data: {
+        id: subscription.id,
+        url: subscription.url,
+        events: subscription.events,
+        secret: subscription.secret, // Only shown once
+        createdAt: subscription.created_at,
+        active: subscription.active,
+      },
       message: 'Webhook subscription created. Store the secret securely - it will not be shown again.',
     });
   } catch (error) {
@@ -132,18 +143,19 @@ export async function DELETE(request: NextRequest) {
       );
     }
     
-    const existingRaw = await kv.get<string>('webhook_subscriptions');
-    const existing: WebhookSubscription[] = existingRaw ? JSON.parse(existingRaw) : [];
-    const filtered = existing.filter(sub => sub.id !== id);
+    const result = await sql`
+      UPDATE webhook_subscriptions 
+      SET is_active = false 
+      WHERE id = ${id}::uuid
+      RETURNING id
+    `;
     
-    if (filtered.length === existing.length) {
+    if (result.length === 0) {
       return NextResponse.json(
         { success: false, error: 'Subscription not found' },
         { status: 404 }
       );
     }
-    
-    await kv.set('webhook_subscriptions', JSON.stringify(filtered));
     
     return NextResponse.json({
       success: true,

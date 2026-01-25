@@ -1,6 +1,6 @@
 # Calendar Scheduler
 
-A production-ready appointment scheduling application built with Next.js 14, designed for deployment on Vercel. Features Microsoft Outlook integration, email notifications, admin authentication, and webhook support.
+A production-ready appointment scheduling application built with Next.js 14, designed for deployment on Vercel with Neon PostgreSQL. Features Microsoft Outlook integration, email notifications, admin authentication, and webhook support.
 
 ![Calendar Scheduler](https://via.placeholder.com/800x400?text=Calendar+Scheduler)
 
@@ -24,13 +24,13 @@ A production-ready appointment scheduling application built with Next.js 14, des
 - **Microsoft Graph API**: Full Outlook calendar read/write access
 - **Email Notifications**: Via Resend (or Microsoft Graph)
 - **Webhooks**: Notify external services on booking events
-- **Vercel KV**: Serverless Redis for data persistence
+- **Neon PostgreSQL**: Serverless Postgres for data persistence
 
 ## Tech Stack
 
 - **Framework**: Next.js 14 (App Router)
 - **Styling**: Tailwind CSS
-- **Database**: Vercel KV (Redis)
+- **Database**: Neon PostgreSQL (Serverless)
 - **Authentication**: JWT with HTTP-only cookies
 - **Email**: Resend API
 - **Calendar**: Microsoft Graph API
@@ -42,6 +42,7 @@ A production-ready appointment scheduling application built with Next.js 14, des
 
 - Node.js 18+
 - Vercel account
+- Neon account (for PostgreSQL)
 - Microsoft Azure account (for Outlook integration)
 - Resend account (for emails)
 
@@ -53,14 +54,32 @@ cd scheduler-app
 npm install
 ```
 
-### 2. Set Up Vercel KV
+### 2. Set Up Neon PostgreSQL
 
-1. Go to your [Vercel Dashboard](https://vercel.com/dashboard)
-2. Create a new KV store: Storage → Create → KV
-3. Link it to your project
-4. Environment variables will be automatically added
+1. Go to [Neon Console](https://console.neon.tech)
+2. Create a new project
+3. Copy the connection string from the dashboard
+4. Add to your `.env.local`:
+   ```
+   DATABASE_URL=postgresql://user:password@ep-xxx.region.aws.neon.tech/dbname?sslmode=require
+   ```
 
-### 3. Set Up Microsoft Azure AD
+### 3. Run Database Migrations
+
+```bash
+# Create a .env.local with your DATABASE_URL first, then:
+npx dotenv -e .env.local -- npm run db:migrate
+```
+
+This creates all necessary tables:
+- `admin_users` - Admin authentication
+- `scheduler_config` - Business settings
+- `meeting_types` - Available meeting types
+- `bookings` - Customer bookings
+- `microsoft_tokens` - OAuth tokens
+- `webhook_subscriptions` - External webhooks
+
+### 4. Set Up Microsoft Azure AD
 
 1. Go to [Azure Portal](https://portal.azure.com)
 2. Navigate to **Azure Active Directory** → **App registrations**
@@ -78,13 +97,13 @@ npm install
    - `offline_access`
 7. Click **Grant admin consent** (if you're an admin)
 
-### 4. Set Up Resend
+### 5. Set Up Resend
 
 1. Sign up at [Resend](https://resend.com)
 2. Create an API key
 3. Verify your domain (or use the sandbox for testing)
 
-### 5. Configure Environment Variables
+### 6. Configure Environment Variables
 
 Create a `.env.local` file (copy from `.env.example`):
 
@@ -92,17 +111,14 @@ Create a `.env.local` file (copy from `.env.example`):
 # Application
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 
+# Neon PostgreSQL
+DATABASE_URL=postgresql://user:password@ep-xxx.region.aws.neon.tech/dbname?sslmode=require
+
 # Microsoft Azure AD
 MICROSOFT_CLIENT_ID=your-azure-client-id
 MICROSOFT_CLIENT_SECRET=your-azure-client-secret
 MICROSOFT_TENANT_ID=common
 MICROSOFT_REDIRECT_URI=http://localhost:3000/api/auth/callback
-
-# Vercel KV (auto-populated by Vercel)
-KV_URL=
-KV_REST_API_URL=
-KV_REST_API_TOKEN=
-KV_REST_API_READ_ONLY_TOKEN=
 
 # Email
 RESEND_API_KEY=re_your_api_key
@@ -123,7 +139,7 @@ WEBHOOK_SECRET=your-webhook-secret
 EXTERNAL_WEBHOOK_URL=
 ```
 
-### 6. Run Locally
+### 7. Run Locally
 
 ```bash
 npm run dev
@@ -131,13 +147,39 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) for the booking page and [http://localhost:3000/admin](http://localhost:3000/admin) for the admin panel.
 
-### 7. Deploy to Vercel
+### 8. Deploy to Vercel
 
 ```bash
 vercel
 ```
 
 Or connect your GitHub repo to Vercel for automatic deployments.
+
+**Important**: Add your Neon DATABASE_URL to Vercel environment variables, or use the [Neon Vercel Integration](https://vercel.com/integrations/neon) for automatic configuration.
+
+## Database Schema
+
+The application uses the following PostgreSQL tables:
+
+```sql
+-- Admin users for authentication
+admin_users (id, email, password_hash, created_at, last_login)
+
+-- Global scheduler configuration (single row)
+scheduler_config (business_name, logo, colors, hours, timezone, outlook_connected)
+
+-- Meeting types available for booking
+meeting_types (id, name, duration, description, color, sort_order, is_active)
+
+-- All customer bookings
+bookings (id, date, time, duration, meeting_type, client_name, client_email, notes, status)
+
+-- Microsoft OAuth tokens (single row)
+microsoft_tokens (access_token, refresh_token, expires_at, scope)
+
+-- External webhook subscriptions
+webhook_subscriptions (id, url, events, secret, is_active)
+```
 
 ## Configuration
 
@@ -231,6 +273,7 @@ Verify webhooks using the `X-Webhook-Signature` header.
 3. **Keep client secrets secure** - never commit to version control
 4. **Enable HTTPS** - Vercel provides this automatically
 5. **Regularly rotate secrets** - especially Microsoft client secrets
+6. **Use Neon's connection pooling** - enabled by default for serverless
 
 ## Troubleshooting
 
@@ -253,6 +296,11 @@ Verify webhooks using the `X-Webhook-Signature` header.
 - The cron job runs every 6 hours to refresh tokens
 - If tokens expire, reconnect Outlook in admin panel
 
+### Database connection issues
+- Verify DATABASE_URL is correct
+- Check Neon dashboard for connection limits
+- Ensure SSL mode is enabled (`?sslmode=require`)
+
 ## Development
 
 ### Project Structure
@@ -273,10 +321,14 @@ scheduler-app/
 │   ├── layout.tsx          # Root layout
 │   └── globals.css         # Global styles
 ├── lib/
+│   ├── db/
+│   │   ├── client.ts       # Neon database client
+│   │   ├── schema.sql      # Database schema
+│   │   └── migrate.ts      # Migration script
 │   ├── auth.ts             # Authentication utilities
 │   ├── email.ts            # Email service
 │   ├── microsoft-graph.ts  # Microsoft Graph API
-│   ├── storage.ts          # Vercel KV operations
+│   ├── storage.ts          # Database operations
 │   ├── types.ts            # TypeScript definitions
 │   └── webhooks.ts         # Webhook utilities
 ├── .env.example            # Environment template
@@ -291,8 +343,20 @@ scheduler-app/
 
 1. Create API route in `app/api/`
 2. Add types to `lib/types.ts`
-3. Update UI components as needed
-4. Add environment variables to `.env.example`
+3. Update database schema in `lib/db/schema.sql`
+4. Run migrations: `npm run db:migrate`
+5. Update UI components as needed
+6. Add environment variables to `.env.example`
+
+### Running Migrations
+
+```bash
+# Local development
+npx dotenv -e .env.local -- npm run db:migrate
+
+# Or set DATABASE_URL directly
+DATABASE_URL=your-connection-string npm run db:migrate
+```
 
 ## License
 
@@ -304,4 +368,4 @@ For issues and feature requests, please create an issue on GitHub.
 
 ---
 
-Built with ❤️ using Next.js and Vercel
+Built with ❤️ using Next.js, Vercel, and Neon

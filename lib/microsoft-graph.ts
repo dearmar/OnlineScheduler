@@ -2,7 +2,7 @@
 import { ConfidentialClientApplication, AuthorizationCodeRequest, RefreshTokenRequest } from '@azure/msal-node';
 import { Client } from '@microsoft/microsoft-graph-client';
 import { MicrosoftTokens, OutlookEvent } from './types';
-import { kv } from '@vercel/kv';
+import { sql } from './db/client';
 
 // MSAL configuration
 const msalConfig = {
@@ -131,20 +131,41 @@ export async function getValidAccessToken(): Promise<string | null> {
   return tokens.accessToken;
 }
 
-// Store tokens in Vercel KV
+// Store tokens in Neon PostgreSQL
 async function storeTokens(tokens: MicrosoftTokens): Promise<void> {
-  await kv.set('microsoft_tokens', JSON.stringify(tokens));
+  await sql`
+    INSERT INTO microsoft_tokens (id, access_token, refresh_token, expires_at, scope)
+    VALUES (1, ${tokens.accessToken}, ${tokens.refreshToken}, ${tokens.expiresAt}, ${tokens.scope})
+    ON CONFLICT (id) DO UPDATE SET
+      access_token = EXCLUDED.access_token,
+      refresh_token = EXCLUDED.refresh_token,
+      expires_at = EXCLUDED.expires_at,
+      scope = EXCLUDED.scope,
+      updated_at = CURRENT_TIMESTAMP
+  `;
 }
 
-// Get stored tokens from Vercel KV
+// Get stored tokens from Neon PostgreSQL
 export async function getStoredTokens(): Promise<MicrosoftTokens | null> {
-  const tokens = await kv.get<string>('microsoft_tokens');
-  return tokens ? JSON.parse(tokens) : null;
+  const result = await sql`
+    SELECT access_token, refresh_token, expires_at, scope
+    FROM microsoft_tokens
+    WHERE id = 1
+  `;
+  
+  if (result.length === 0) return null;
+  
+  return {
+    accessToken: result[0].access_token,
+    refreshToken: result[0].refresh_token,
+    expiresAt: parseInt(result[0].expires_at),
+    scope: result[0].scope,
+  };
 }
 
 // Clear stored tokens
 export async function clearTokens(): Promise<void> {
-  await kv.del('microsoft_tokens');
+  await sql`DELETE FROM microsoft_tokens WHERE id = 1`;
 }
 
 // Create Microsoft Graph client
