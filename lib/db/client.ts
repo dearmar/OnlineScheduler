@@ -1,5 +1,5 @@
 // Neon Database client configuration
-import { neon, neonConfig } from '@neondatabase/serverless';
+import { neon, neonConfig, NeonQueryFunction } from '@neondatabase/serverless';
 
 // Enable connection pooling for serverless
 neonConfig.fetchConnectionCache = true;
@@ -7,18 +7,15 @@ neonConfig.fetchConnectionCache = true;
 // Create SQL query function
 export const sql = neon(process.env.DATABASE_URL!);
 
-// Helper for transactions
+// Type for the sql function
+export type SqlClient = NeonQueryFunction<false, false>;
+
+// Helper for transactions (note: Neon serverless has limited transaction support)
+// For full transaction support, consider using @neondatabase/serverless with WebSocket
 export async function withTransaction<T>(
-  callback: (sql: typeof import('@neondatabase/serverless').neon) => Promise<T>
+  callback: (sql: SqlClient) => Promise<T>
 ): Promise<T> {
-  const client = neon(process.env.DATABASE_URL!);
-  try {
-    await client`BEGIN`;
-    const result = await callback(client);
-    await client`COMMIT`;
-    return result;
-  } catch (error) {
-    await client`ROLLBACK`;
-    throw error;
-  }
+  // For serverless, we run queries sequentially
+  // True transactions require WebSocket connection
+  return callback(sql);
 }
