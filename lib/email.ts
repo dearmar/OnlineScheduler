@@ -2,8 +2,17 @@
 import { Resend } from 'resend';
 import { BookedSlot, SchedulerConfig } from './types';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-const FROM_EMAIL = process.env.EMAIL_FROM || 'noreply@example.com';
+// Lazy-load Resend client to avoid build-time initialization errors
+let resendClient: Resend | null = null;
+
+function getResendClient(): Resend {
+  if (!resendClient) {
+    resendClient = new Resend(process.env.RESEND_API_KEY);
+  }
+  return resendClient;
+}
+
+const getFromEmail = () => process.env.EMAIL_FROM || 'noreply@example.com';
 
 // Format time for display
 function formatTime(time: string): string {
@@ -197,8 +206,8 @@ export async function sendClientConfirmation(booking: BookedSlot, config: Schedu
   const html = generateClientConfirmationEmail(booking, config);
 
   try {
-    await resend.emails.send({
-      from: `${config.businessName} <${FROM_EMAIL}>`,
+    await getResendClient().emails.send({
+      from: `${config.businessName} <${getFromEmail()}>`,
       to: booking.clientEmail,
       subject: `Booking Confirmed: ${booking.meetingType} on ${formatDate(booking.date)}`,
       html,
@@ -227,8 +236,8 @@ export async function sendAdminNotification(booking: BookedSlot, config: Schedul
   const html = generateAdminNotificationEmail(booking, config);
 
   try {
-    await resend.emails.send({
-      from: `Calendar Scheduler <${FROM_EMAIL}>`,
+    await getResendClient().emails.send({
+      from: `Calendar Scheduler <${getFromEmail()}>`,
       to: adminEmail,
       subject: `New Booking: ${booking.clientName} - ${booking.meetingType}`,
       html,
@@ -286,8 +295,8 @@ export async function sendCancellationEmail(booking: BookedSlot, config: Schedul
 </html>
   `;
 
-  await resend.emails.send({
-    from: `${config.businessName} <${FROM_EMAIL}>`,
+  await getResendClient().emails.send({
+    from: `${config.businessName} <${getFromEmail()}>`,
     to: booking.clientEmail,
     subject: `Booking Cancelled: ${booking.meetingType}`,
     html,

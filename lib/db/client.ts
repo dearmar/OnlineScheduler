@@ -15,5 +15,7 @@ export type SqlClient = NeonQueryFunction<false, false>;
 export async function withTransaction<T>(
   callback: (sql: SqlClient) => Promise<T>
 ): Promise<T> {
+  // For serverless, we run queries sequentially
+  // True transactions require WebSocket connection
   return callback(sql);
 }
