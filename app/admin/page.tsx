@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { SchedulerConfig, MeetingType } from '@/lib/types';
@@ -65,7 +65,17 @@ const formatTime = (hour: number, minute: number): string => {
   return `${displayHour}:${minute.toString().padStart(2, '0')} ${period}`;
 };
 
-export default function AdminPage() {
+// Loading component for Suspense
+function AdminLoading() {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
+      <div className="animate-spin rounded-full h-8 w-8 border-2 border-indigo-500 border-t-transparent"></div>
+    </div>
+  );
+}
+
+// Main admin content component
+function AdminPageContent() {
   const searchParams = useSearchParams();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -786,5 +796,14 @@ function OutlookTab({ config, showToast, accentColor, primaryColor }: {
         </>
       )}
     </div>
+  );
+}
+
+// Default export with Suspense wrapper
+export default function AdminPage() {
+  return (
+    <Suspense fallback={<AdminLoading />}>
+      <AdminPageContent />
+    </Suspense>
   );
 }
