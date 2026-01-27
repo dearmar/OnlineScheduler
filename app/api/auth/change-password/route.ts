@@ -3,12 +3,13 @@
 // Force dynamic
 export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
-import { changePassword, isAuthenticated } from '@/lib/auth';
+import { changePassword, getAuthenticatedUser } from '@/lib/auth';
 
 export async function POST(request: NextRequest) {
   try {
     // Verify authentication
-    if (!(await isAuthenticated(request))) {
+    const authUser = await getAuthenticatedUser(request);
+    if (!authUser) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
@@ -31,7 +32,7 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    const success = await changePassword(currentPassword, newPassword);
+    const success = await changePassword(authUser.userId, currentPassword, newPassword);
     
     if (!success) {
       return NextResponse.json(
