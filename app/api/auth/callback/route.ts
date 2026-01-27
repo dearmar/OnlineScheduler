@@ -1,4 +1,4 @@
-// GET /api/auth/callback - Microsoft OAuth callback
+// GET /api/auth/callback - Microsoft OAuth callback (multi-tenant)
 
 // Force dynamic
 export const dynamic = 'force-dynamic';
@@ -10,11 +10,10 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const code = searchParams.get('code');
+    const state = searchParams.get('state');
     const error = searchParams.get('error');
     const errorDescription = searchParams.get('error_description');
-    const state = searchParams.get('state');
 
-    // Handle error from Microsoft
     if (error) {
       console.error('OAuth error:', error, errorDescription);
       return NextResponse.redirect(
@@ -22,36 +21,52 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Verify we have a code
     if (!code) {
       return NextResponse.redirect(
-        new URL('/admin?error=No%20authorization%20code%20received', request.url)
+        new URL('/admin?error=No authorization code received', request.url)
       );
     }
 
-    // Exchange code for tokens
-    await exchangeCodeForTokens(code);
+    if (!state) {
+      return NextResponse.redirect(
+        new URL('/admin?error=No state received', request.url)
+      );
+    }
+    
+    // Decode state to get userId
+    let userId: string;
+    try {
+      const decodedState = JSON.parse(Buffer.from(state, 'base64').toString());
+      userId = decodedState.userId;
+      if (!userId) {
+        throw new Error('No userId in state');
+      }
+    } catch (e) {
+      return NextResponse.redirect(
+        new URL('/admin?error=Invalid state parameter', request.url)
+      );
+    }
 
-    // Get user profile to store email
-    const profile = await getUserProfile();
-    const email = profile.mail || profile.userPrincipalName;
+    // Exchange code for tokens (stores them for user)
+    await exchangeCodeForTokens(code, userId);
+    
+    // Get user profile to update config
+    const profile = await getUserProfile(userId);
+    
+    if (profile) {
+      await updateConfig(userId, {
+        outlookEmail: profile.email,
+        outlookConnected: true,
+      });
+    }
 
-    // Update config with Outlook connection
-    await updateConfig({
-      outlookEmail: email,
-      outlookConnected: true,
-    });
-
-    console.log('Microsoft OAuth successful for:', email);
-
-    // Redirect back to admin panel
     return NextResponse.redirect(
-      new URL('/admin?success=Outlook%20connected%20successfully', request.url)
+      new URL('/admin?success=Successfully connected to Microsoft Outlook!', request.url)
     );
-  } catch (error) {
-    console.error('OAuth callback error:', error);
+  } catch (error: any) {
+    console.error('Callback error:', error);
     return NextResponse.redirect(
-      new URL('/admin?error=Failed%20to%20connect%20Outlook', request.url)
+      new URL(`/admin?error=${encodeURIComponent(error.message || 'Failed to complete authentication')}`, request.url)
     );
   }
 }

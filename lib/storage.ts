@@ -1,395 +1,331 @@
-// Data storage using Neon PostgreSQL
+// Database storage operations - Multi-tenant version
 import { sql } from './db/client';
-import { SchedulerConfig, BookedSlot, MeetingType } from './types';
+import { SchedulerConfig, MeetingType, BookedSlot } from './types';
 import { v4 as uuidv4 } from 'uuid';
 
-// Get scheduler configuration
-export async function getConfig(): Promise<SchedulerConfig> {
-  try {
-    // Get base config
-    const configRows = await sql`
-      SELECT 
-        business_name, logo, primary_color, accent_color,
-        start_hour, end_hour, timezone, outlook_email, outlook_connected
-      FROM scheduler_config 
-      WHERE id = 1
-    `;
-    
-    // Get meeting types
-    const meetingTypes = await sql`
-      SELECT id, name, duration, description, color
-      FROM meeting_types
-      WHERE is_active = true
-      ORDER BY sort_order ASC
-    `;
-    
-    // Get booked slots
-    const bookings = await sql`
-      SELECT 
-        id, date, time, duration, meeting_type_name as "meetingType",
-        client_name as "clientName", client_email as "clientEmail",
-        notes, outlook_event_id as "outlookEventId", created_at as "createdAt"
-      FROM bookings
-      WHERE status = 'confirmed'
-      ORDER BY date, time
-    `;
+// Default configuration for new users
+const defaultConfig: Omit<SchedulerConfig, 'meetingTypes' | 'bookedSlots'> = {
+  businessName: 'Your Business',
+  logo: null,
+  primaryColor: '#1a1a2e',
+  accentColor: '#4f46e5',
+  startHour: 9,
+  endHour: 17,
+  timezone: 'America/New_York',
+  outlookEmail: '',
+  outlookConnected: false,
+};
 
-    const config = configRows[0] || {};
-    
-    return {
-      businessName: config.business_name || 'Your Business',
-      logo: config.logo || null,
-      primaryColor: config.primary_color || '#1a1a2e',
-      accentColor: config.accent_color || '#4f46e5',
-      startHour: config.start_hour || 9,
-      endHour: config.end_hour || 17,
-      timezone: config.timezone || 'America/New_York',
-      outlookEmail: config.outlook_email || '',
-      outlookConnected: config.outlook_connected || false,
-      meetingTypes: meetingTypes.map(mt => ({
-        id: mt.id,
-        name: mt.name,
-        duration: mt.duration as 15 | 30 | 60,
-        description: mt.description || '',
-        color: mt.color,
-      })),
-      bookedSlots: bookings.map(b => ({
-        id: b.id,
-        date: b.date instanceof Date ? b.date.toISOString().split('T')[0] : b.date,
-        time: typeof b.time === 'string' ? b.time.slice(0, 5) : b.time,
-        duration: b.duration,
-        meetingType: b.meetingType,
-        clientName: b.clientName,
-        clientEmail: b.clientEmail,
-        notes: b.notes,
-        outlookEventId: b.outlookEventId,
-        createdAt: b.createdAt,
-      })),
-    };
-  } catch (error) {
-    console.error('Error fetching config:', error);
-    throw error;
-  }
+// Default meeting types for new users
+const defaultMeetingTypes: Omit<MeetingType, 'id'>[] = [
+  { name: 'Quick Chat', duration: 15, description: 'A brief 15-minute consultation', color: '#10b981' },
+  { name: 'Standard Meeting', duration: 30, description: 'A focused 30-minute discussion', color: '#4f46e5' },
+  { name: 'Deep Dive', duration: 60, description: 'An in-depth 60-minute session', color: '#8b5cf6' },
+];
+
+// Get user by slug or ID
+export async function getUserBySlugOrId(slugOrId: string): Promise<{ id: string; name: string; slug: string } | null> {
+  const result = await sql`
+    SELECT id, name, slug FROM admin_users 
+    WHERE slug = ${slugOrId} OR id::text = ${slugOrId}
+    LIMIT 1
+  `;
+  
+  if (result.length === 0) return null;
+  return { id: result[0].id, name: result[0].name, slug: result[0].slug };
 }
 
-// Update partial configuration
-export async function updateConfig(updates: Partial<SchedulerConfig>): Promise<SchedulerConfig> {
-  try {
-    // Update base config fields
-    if (updates.businessName !== undefined || 
-        updates.logo !== undefined ||
-        updates.primaryColor !== undefined ||
-        updates.accentColor !== undefined ||
-        updates.startHour !== undefined ||
-        updates.endHour !== undefined ||
-        updates.timezone !== undefined ||
-        updates.outlookEmail !== undefined ||
-        updates.outlookConnected !== undefined) {
-      
+// Ensure config exists for user (creates default if not)
+export async function ensureUserConfig(userId: string): Promise<void> {
+  // Check if config exists
+  const existing = await sql`SELECT id FROM scheduler_config WHERE user_id = ${userId}::uuid`;
+  
+  if (existing.length === 0) {
+    // Create default config
+    await sql`
+      INSERT INTO scheduler_config (user_id, business_name, primary_color, accent_color, start_hour, end_hour, timezone)
+      VALUES (${userId}::uuid, ${defaultConfig.businessName}, ${defaultConfig.primaryColor}, ${defaultConfig.accentColor}, ${defaultConfig.startHour}, ${defaultConfig.endHour}, ${defaultConfig.timezone})
+    `;
+    
+    // Create default meeting types
+    for (const mt of defaultMeetingTypes) {
       await sql`
-        UPDATE scheduler_config SET
-          business_name = COALESCE(${updates.businessName ?? null}, business_name),
-          logo = COALESCE(${updates.logo ?? null}, logo),
-          primary_color = COALESCE(${updates.primaryColor ?? null}, primary_color),
-          accent_color = COALESCE(${updates.accentColor ?? null}, accent_color),
-          start_hour = COALESCE(${updates.startHour ?? null}, start_hour),
-          end_hour = COALESCE(${updates.endHour ?? null}, end_hour),
-          timezone = COALESCE(${updates.timezone ?? null}, timezone),
-          outlook_email = COALESCE(${updates.outlookEmail ?? null}, outlook_email),
-          outlook_connected = COALESCE(${updates.outlookConnected ?? null}, outlook_connected)
-        WHERE id = 1
+        INSERT INTO meeting_types (user_id, name, duration, description, color, sort_order)
+        VALUES (${userId}::uuid, ${mt.name}, ${mt.duration}, ${mt.description || ''}, ${mt.color}, ${defaultMeetingTypes.indexOf(mt) + 1})
       `;
     }
-
-    // Update meeting types if provided
-    if (updates.meetingTypes) {
-      // Mark all as inactive first
-      await sql`UPDATE meeting_types SET is_active = false`;
-      
-      // Upsert each meeting type
-      for (let i = 0; i < updates.meetingTypes.length; i++) {
-        const mt = updates.meetingTypes[i];
-        
-        // Check if ID is a valid UUID format, if not generate a new one
-        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        const isValidUuid = uuidRegex.test(mt.id);
-        
-        if (isValidUuid) {
-          // Update existing or insert with provided UUID
-          await sql`
-            INSERT INTO meeting_types (id, name, duration, description, color, sort_order, is_active)
-            VALUES (${mt.id}::uuid, ${mt.name}, ${mt.duration}, ${mt.description || ''}, ${mt.color}, ${i}, true)
-            ON CONFLICT (id) DO UPDATE SET
-              name = EXCLUDED.name,
-              duration = EXCLUDED.duration,
-              description = EXCLUDED.description,
-              color = EXCLUDED.color,
-              sort_order = EXCLUDED.sort_order,
-              is_active = true
-          `;
-        } else {
-          // Insert new with generated UUID
-          await sql`
-            INSERT INTO meeting_types (name, duration, description, color, sort_order, is_active)
-            VALUES (${mt.name}, ${mt.duration}, ${mt.description || ''}, ${mt.color}, ${i}, true)
-          `;
-        }
-      }
-    }
-
-    return await getConfig();
-  } catch (error) {
-    console.error('Error updating config:', error);
-    throw error;
   }
 }
 
-// Get all bookings
-export async function getBookings(): Promise<BookedSlot[]> {
-  const bookings = await sql`
-    SELECT 
-      id, date, time, duration, meeting_type_name as "meetingType",
-      client_name as "clientName", client_email as "clientEmail",
-      notes, outlook_event_id as "outlookEventId", created_at as "createdAt"
+// Get configuration for a specific user
+export async function getConfig(userId: string): Promise<SchedulerConfig> {
+  // Ensure config exists
+  await ensureUserConfig(userId);
+  
+  // Get config
+  const configResult = await sql`
+    SELECT business_name, logo, primary_color, accent_color, start_hour, end_hour, timezone, outlook_email, outlook_connected
+    FROM scheduler_config
+    WHERE user_id = ${userId}::uuid
+  `;
+  
+  const config = configResult[0];
+  
+  // Get meeting types
+  const meetingTypes = await sql`
+    SELECT id, name, duration, description, color
+    FROM meeting_types
+    WHERE user_id = ${userId}::uuid AND is_active = true
+    ORDER BY sort_order ASC, created_at ASC
+  `;
+  
+  // Get booked slots
+  const bookedSlots = await sql`
+    SELECT id, date, time, duration, meeting_type_name, client_name, client_email, notes, outlook_event_id, created_at
     FROM bookings
-    WHERE status = 'confirmed'
+    WHERE user_id = ${userId}::uuid AND status = 'confirmed'
+    ORDER BY date ASC, time ASC
+  `;
+  
+  return {
+    businessName: config.business_name,
+    logo: config.logo,
+    primaryColor: config.primary_color,
+    accentColor: config.accent_color,
+    startHour: config.start_hour,
+    endHour: config.end_hour,
+    timezone: config.timezone,
+    outlookEmail: config.outlook_email || '',
+    outlookConnected: config.outlook_connected,
+    meetingTypes: meetingTypes.map(mt => ({
+      id: mt.id,
+      name: mt.name,
+      duration: mt.duration as 15 | 30 | 60,
+      description: mt.description || '',
+      color: mt.color,
+    })),
+    bookedSlots: bookedSlots.map(slot => ({
+      id: slot.id,
+      date: slot.date instanceof Date ? slot.date.toISOString().split('T')[0] : String(slot.date),
+      time: String(slot.time).substring(0, 5),
+      duration: slot.duration,
+      meetingType: slot.meeting_type_name,
+      clientName: slot.client_name,
+      clientEmail: slot.client_email,
+      notes: slot.notes,
+      outlookEventId: slot.outlook_event_id,
+      createdAt: slot.created_at,
+    })),
+  };
+}
+
+// Update configuration for a specific user
+export async function updateConfig(userId: string, updates: Partial<SchedulerConfig>): Promise<SchedulerConfig> {
+  // Ensure config exists
+  await ensureUserConfig(userId);
+  
+  // Update scheduler_config table
+  if (updates.businessName !== undefined || updates.logo !== undefined || 
+      updates.primaryColor !== undefined || updates.accentColor !== undefined ||
+      updates.startHour !== undefined || updates.endHour !== undefined || 
+      updates.timezone !== undefined || updates.outlookEmail !== undefined ||
+      updates.outlookConnected !== undefined) {
+    
+    await sql`
+      UPDATE scheduler_config SET
+        business_name = COALESCE(${updates.businessName ?? null}, business_name),
+        logo = COALESCE(${updates.logo ?? null}, logo),
+        primary_color = COALESCE(${updates.primaryColor ?? null}, primary_color),
+        accent_color = COALESCE(${updates.accentColor ?? null}, accent_color),
+        start_hour = COALESCE(${updates.startHour ?? null}, start_hour),
+        end_hour = COALESCE(${updates.endHour ?? null}, end_hour),
+        timezone = COALESCE(${updates.timezone ?? null}, timezone),
+        outlook_email = COALESCE(${updates.outlookEmail ?? null}, outlook_email),
+        outlook_connected = COALESCE(${updates.outlookConnected ?? null}, outlook_connected)
+      WHERE user_id = ${userId}::uuid
+    `;
+  }
+  
+  // Handle meeting types updates
+  if (updates.meetingTypes) {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    
+    for (let i = 0; i < updates.meetingTypes.length; i++) {
+      const mt = updates.meetingTypes[i];
+      const isValidUUID = uuidRegex.test(mt.id);
+      
+      if (isValidUUID) {
+        // Check if exists for this user
+        const existing = await sql`SELECT id FROM meeting_types WHERE id = ${mt.id}::uuid AND user_id = ${userId}::uuid`;
+        
+        if (existing.length > 0) {
+          await sql`
+            UPDATE meeting_types SET
+              name = ${mt.name},
+              duration = ${mt.duration},
+              description = ${mt.description || ''},
+              color = ${mt.color},
+              sort_order = ${i + 1}
+            WHERE id = ${mt.id}::uuid AND user_id = ${userId}::uuid
+          `;
+        } else {
+          await sql`
+            INSERT INTO meeting_types (id, user_id, name, duration, description, color, sort_order)
+            VALUES (${mt.id}::uuid, ${userId}::uuid, ${mt.name}, ${mt.duration}, ${mt.description || ''}, ${mt.color}, ${i + 1})
+          `;
+        }
+      } else {
+        // Insert new with generated UUID
+        const newId = uuidv4();
+        await sql`
+          INSERT INTO meeting_types (id, user_id, name, duration, description, color, sort_order)
+          VALUES (${newId}::uuid, ${userId}::uuid, ${mt.name}, ${mt.duration}, ${mt.description || ''}, ${mt.color}, ${i + 1})
+        `;
+      }
+    }
+    
+    // Deactivate meeting types not in the update list
+    const activeIds = updates.meetingTypes
+      .filter(mt => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mt.id))
+      .map(mt => mt.id);
+    
+    if (activeIds.length > 0) {
+      await sql`
+        UPDATE meeting_types SET is_active = false 
+        WHERE user_id = ${userId}::uuid AND id != ALL(${activeIds}::uuid[])
+      `;
+    }
+  }
+  
+  return getConfig(userId);
+}
+
+// Get all bookings for a user
+export async function getBookings(userId: string): Promise<BookedSlot[]> {
+  const bookings = await sql`
+    SELECT id, date, time, duration, meeting_type_name, client_name, client_email, notes, outlook_event_id, status, created_at
+    FROM bookings
+    WHERE user_id = ${userId}::uuid
     ORDER BY date DESC, time DESC
   `;
   
-  return bookings.map(b => ({
-    id: b.id,
-    date: b.date instanceof Date ? b.date.toISOString().split('T')[0] : b.date,
-    time: typeof b.time === 'string' ? b.time.slice(0, 5) : b.time,
-    duration: b.duration,
-    meetingType: b.meetingType,
-    clientName: b.clientName,
-    clientEmail: b.clientEmail,
-    notes: b.notes,
-    outlookEventId: b.outlookEventId,
-    createdAt: b.createdAt,
+  return bookings.map(slot => ({
+    id: slot.id,
+    date: slot.date instanceof Date ? slot.date.toISOString().split('T')[0] : String(slot.date),
+    time: String(slot.time).substring(0, 5),
+    duration: slot.duration,
+    meetingType: slot.meeting_type_name,
+    clientName: slot.client_name,
+    clientEmail: slot.client_email,
+    notes: slot.notes,
+    outlookEventId: slot.outlook_event_id,
+    createdAt: slot.created_at,
   }));
 }
 
-// Get bookings for a specific date
-export async function getBookingsForDate(date: string): Promise<BookedSlot[]> {
-  const bookings = await sql`
-    SELECT 
-      id, date, time, duration, meeting_type_name as "meetingType",
-      client_name as "clientName", client_email as "clientEmail",
-      notes, outlook_event_id as "outlookEventId", created_at as "createdAt"
+// Get booking by ID
+export async function getBookingById(bookingId: string): Promise<BookedSlot | null> {
+  const result = await sql`
+    SELECT id, date, time, duration, meeting_type_name, client_name, client_email, notes, outlook_event_id, created_at
     FROM bookings
-    WHERE date = ${date}::date AND status = 'confirmed'
-    ORDER BY time
+    WHERE id = ${bookingId}::uuid
   `;
   
-  return bookings.map(b => ({
-    id: b.id,
-    date: b.date instanceof Date ? b.date.toISOString().split('T')[0] : b.date,
-    time: typeof b.time === 'string' ? b.time.slice(0, 5) : b.time,
-    duration: b.duration,
-    meetingType: b.meetingType,
-    clientName: b.clientName,
-    clientEmail: b.clientEmail,
-    notes: b.notes,
-    outlookEventId: b.outlookEventId,
-    createdAt: b.createdAt,
-  }));
-}
-
-// Get bookings for a date range
-export async function getBookingsInRange(startDate: string, endDate: string): Promise<BookedSlot[]> {
-  const bookings = await sql`
-    SELECT 
-      id, date, time, duration, meeting_type_name as "meetingType",
-      client_name as "clientName", client_email as "clientEmail",
-      notes, outlook_event_id as "outlookEventId", created_at as "createdAt"
-    FROM bookings
-    WHERE date >= ${startDate}::date 
-      AND date <= ${endDate}::date 
-      AND status = 'confirmed'
-    ORDER BY date, time
-  `;
+  if (result.length === 0) return null;
   
-  return bookings.map(b => ({
-    id: b.id,
-    date: b.date instanceof Date ? b.date.toISOString().split('T')[0] : b.date,
-    time: typeof b.time === 'string' ? b.time.slice(0, 5) : b.time,
-    duration: b.duration,
-    meetingType: b.meetingType,
-    clientName: b.clientName,
-    clientEmail: b.clientEmail,
-    notes: b.notes,
-    outlookEventId: b.outlookEventId,
-    createdAt: b.createdAt,
-  }));
+  const slot = result[0];
+  return {
+    id: slot.id,
+    date: slot.date instanceof Date ? slot.date.toISOString().split('T')[0] : String(slot.date),
+    time: String(slot.time).substring(0, 5),
+    duration: slot.duration,
+    meetingType: slot.meeting_type_name,
+    clientName: slot.client_name,
+    clientEmail: slot.client_email,
+    notes: slot.notes,
+    outlookEventId: slot.outlook_event_id,
+    createdAt: slot.created_at,
+  };
 }
 
 // Add a new booking
-export async function addBooking(booking: Omit<BookedSlot, 'id' | 'createdAt'>): Promise<BookedSlot> {
+export async function addBooking(userId: string, booking: Omit<BookedSlot, 'id' | 'createdAt'>): Promise<BookedSlot> {
   const id = uuidv4();
+  const now = new Date().toISOString();
   
-  // Find meeting type ID if exists
-  const meetingTypeRows = await sql`
-    SELECT id FROM meeting_types WHERE name = ${booking.meetingType} AND is_active = true LIMIT 1
-  `;
-  const meetingTypeId = meetingTypeRows[0]?.id || null;
-  
-  const result = await sql`
-    INSERT INTO bookings (
-      id, date, time, duration, meeting_type_id, meeting_type_name,
-      client_name, client_email, notes, outlook_event_id
-    ) VALUES (
-      ${id}::uuid, ${booking.date}::date, ${booking.time}::time, ${booking.duration},
-      ${meetingTypeId}::uuid, ${booking.meetingType}, ${booking.clientName},
-      ${booking.clientEmail}, ${booking.notes || null}, ${booking.outlookEventId || null}
-    )
-    RETURNING id, date, time, duration, meeting_type_name as "meetingType",
-      client_name as "clientName", client_email as "clientEmail",
-      notes, outlook_event_id as "outlookEventId", created_at as "createdAt"
+  await sql`
+    INSERT INTO bookings (id, user_id, date, time, duration, meeting_type_name, client_name, client_email, notes, outlook_event_id)
+    VALUES (${id}::uuid, ${userId}::uuid, ${booking.date}, ${booking.time}, ${booking.duration}, ${booking.meetingType}, ${booking.clientName}, ${booking.clientEmail}, ${booking.notes || null}, ${booking.outlookEventId || null})
   `;
   
-  const b = result[0];
   return {
-    id: b.id,
-    date: b.date instanceof Date ? b.date.toISOString().split('T')[0] : b.date,
-    time: typeof b.time === 'string' ? b.time.slice(0, 5) : b.time,
-    duration: b.duration,
-    meetingType: b.meetingType,
-    clientName: b.clientName,
-    clientEmail: b.clientEmail,
-    notes: b.notes,
-    outlookEventId: b.outlookEventId,
-    createdAt: b.createdAt,
+    id,
+    ...booking,
+    createdAt: now,
   };
 }
 
-// Update a booking
-export async function updateBooking(id: string, updates: Partial<BookedSlot>): Promise<BookedSlot | null> {
-  const result = await sql`
+// Update booking
+export async function updateBooking(bookingId: string, updates: Partial<BookedSlot>): Promise<BookedSlot | null> {
+  await sql`
     UPDATE bookings SET
-      date = COALESCE(${updates.date ?? null}::date, date),
-      time = COALESCE(${updates.time ?? null}::time, time),
-      duration = COALESCE(${updates.duration ?? null}, duration),
-      meeting_type_name = COALESCE(${updates.meetingType ?? null}, meeting_type_name),
-      client_name = COALESCE(${updates.clientName ?? null}, client_name),
-      client_email = COALESCE(${updates.clientEmail ?? null}, client_email),
+      date = COALESCE(${updates.date ?? null}, date),
+      time = COALESCE(${updates.time ?? null}, time),
       notes = COALESCE(${updates.notes ?? null}, notes),
       outlook_event_id = COALESCE(${updates.outlookEventId ?? null}, outlook_event_id)
-    WHERE id = ${id}::uuid
-    RETURNING id, date, time, duration, meeting_type_name as "meetingType",
-      client_name as "clientName", client_email as "clientEmail",
-      notes, outlook_event_id as "outlookEventId", created_at as "createdAt"
+    WHERE id = ${bookingId}::uuid
   `;
   
-  if (result.length === 0) return null;
-  
-  const b = result[0];
-  return {
-    id: b.id,
-    date: b.date instanceof Date ? b.date.toISOString().split('T')[0] : b.date,
-    time: typeof b.time === 'string' ? b.time.slice(0, 5) : b.time,
-    duration: b.duration,
-    meetingType: b.meetingType,
-    clientName: b.clientName,
-    clientEmail: b.clientEmail,
-    notes: b.notes,
-    outlookEventId: b.outlookEventId,
-    createdAt: b.createdAt,
-  };
+  return getBookingById(bookingId);
 }
 
-// Delete a booking (mark as cancelled)
-export async function deleteBooking(id: string): Promise<boolean> {
-  const result = await sql`
-    UPDATE bookings SET status = 'cancelled' WHERE id = ${id}::uuid
-    RETURNING id
-  `;
-  return result.length > 0;
+// Delete (cancel) booking
+export async function deleteBooking(bookingId: string): Promise<boolean> {
+  await sql`UPDATE bookings SET status = 'cancelled' WHERE id = ${bookingId}::uuid`;
+  return true;
 }
 
-// Get a single booking by ID
-export async function getBookingById(id: string): Promise<BookedSlot | null> {
-  const result = await sql`
-    SELECT 
-      id, date, time, duration, meeting_type_name as "meetingType",
-      client_name as "clientName", client_email as "clientEmail",
-      notes, outlook_event_id as "outlookEventId", created_at as "createdAt"
-    FROM bookings
-    WHERE id = ${id}::uuid AND status = 'confirmed'
-  `;
-  
-  if (result.length === 0) return null;
-  
-  const b = result[0];
-  return {
-    id: b.id,
-    date: b.date instanceof Date ? b.date.toISOString().split('T')[0] : b.date,
-    time: typeof b.time === 'string' ? b.time.slice(0, 5) : b.time,
-    duration: b.duration,
-    meetingType: b.meetingType,
-    clientName: b.clientName,
-    clientEmail: b.clientEmail,
-    notes: b.notes,
-    outlookEventId: b.outlookEventId,
-    createdAt: b.createdAt,
-  };
-}
-
-// Check if a time slot is available
-export async function isSlotAvailable(date: string, time: string, duration: number): Promise<boolean> {
-  // Calculate end time
+// Check if a slot is available
+export async function isSlotAvailable(userId: string, date: string, time: string, duration: number): Promise<boolean> {
   const [hours, minutes] = time.split(':').map(Number);
   const startMinutes = hours * 60 + minutes;
   const endMinutes = startMinutes + duration;
-  const endHours = Math.floor(endMinutes / 60);
-  const endMins = endMinutes % 60;
-  const endTime = `${endHours.toString().padStart(2, '0')}:${endMins.toString().padStart(2, '0')}`;
   
-  // Check for overlapping bookings
-  const result = await sql`
-    SELECT COUNT(*) as count FROM bookings
-    WHERE date = ${date}::date
-      AND status = 'confirmed'
-      AND (
-        (time <= ${time}::time AND time + (duration || ' minutes')::interval > ${time}::time)
-        OR
-        (time < ${endTime}::time AND time >= ${time}::time)
-      )
+  const bookings = await sql`
+    SELECT time, duration FROM bookings
+    WHERE user_id = ${userId}::uuid AND date = ${date} AND status = 'confirmed'
   `;
   
-  return parseInt(result[0].count) === 0;
+  for (const booking of bookings) {
+    const bookingTime = String(booking.time).substring(0, 5);
+    const [bHours, bMinutes] = bookingTime.split(':').map(Number);
+    const bookingStart = bHours * 60 + bMinutes;
+    const bookingEnd = bookingStart + booking.duration;
+    
+    if ((startMinutes >= bookingStart && startMinutes < bookingEnd) ||
+        (endMinutes > bookingStart && endMinutes <= bookingEnd) ||
+        (startMinutes <= bookingStart && endMinutes >= bookingEnd)) {
+      return false;
+    }
+  }
+  
+  return true;
 }
 
-// Get available time slots for a date
-export async function getAvailableSlots(
-  date: string,
-  duration: number,
-  startHour: number,
-  endHour: number
-): Promise<string[]> {
-  const bookings = await getBookingsForDate(date);
+// Get available slots for a date
+export async function getAvailableSlots(userId: string, date: string, duration: number): Promise<string[]> {
+  const config = await getConfig(userId);
   const slots: string[] = [];
   
-  for (let hour = startHour; hour < endHour; hour++) {
-    for (let minute = 0; minute < 60; minute += duration) {
-      // Don't create slots that would extend past end hour
-      const slotEndMinutes = hour * 60 + minute + duration;
-      if (slotEndMinutes > endHour * 60) continue;
-      
-      const time = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-      const slotStart = hour * 60 + minute;
-      const slotEnd = slotStart + duration;
-      
-      // Check if slot conflicts with any booking
-      const hasConflict = bookings.some(booking => {
-        const [bHours, bMinutes] = booking.time.split(':').map(Number);
-        const bookingStart = bHours * 60 + bMinutes;
-        const bookingEnd = bookingStart + booking.duration;
-        return slotStart < bookingEnd && slotEnd > bookingStart;
-      });
-      
-      if (!hasConflict) {
-        slots.push(time);
+  // Generate all possible slots
+  for (let hour = config.startHour; hour < config.endHour; hour++) {
+    for (let minute = 0; minute < 60; minute += 15) {
+      const slotEnd = hour * 60 + minute + duration;
+      if (slotEnd <= config.endHour * 60) {
+        const time = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+        if (await isSlotAvailable(userId, date, time, duration)) {
+          slots.push(time);
+        }
       }
     }
   }
@@ -397,22 +333,8 @@ export async function getAvailableSlots(
   return slots;
 }
 
-// Get meeting type by ID
-export async function getMeetingType(id: string): Promise<MeetingType | null> {
-  const result = await sql`
-    SELECT id, name, duration, description, color
-    FROM meeting_types
-    WHERE id = ${id}::uuid AND is_active = true
-  `;
-  
-  if (result.length === 0) return null;
-  
-  const mt = result[0];
-  return {
-    id: mt.id,
-    name: mt.name,
-    duration: mt.duration as 15 | 30 | 60,
-    description: mt.description || '',
-    color: mt.color,
-  };
+// Get user ID from booking
+export async function getUserIdFromBooking(bookingId: string): Promise<string | null> {
+  const result = await sql`SELECT user_id FROM bookings WHERE id = ${bookingId}::uuid`;
+  return result.length > 0 ? result[0].user_id : null;
 }

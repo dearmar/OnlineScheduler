@@ -10,6 +10,7 @@ interface AdminUserDisplay {
   id: string;
   email: string;
   name?: string;
+  slug?: string;
   mustResetPassword?: boolean;
   createdAt: string;
   lastLogin?: string;
@@ -113,6 +114,9 @@ function AdminPageContent() {
   const [resetPasswordForm, setResetPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [resetToken, setResetToken] = useState<string | null>(null);
   const [tokenResetForm, setTokenResetForm] = useState({ newPassword: '', confirmPassword: '' });
+  
+  // Current user info
+  const [currentUser, setCurrentUser] = useState<{ id: string; email: string; name?: string; slug?: string } | null>(null);
 
   // Check for URL params (reset token, messages)
   useEffect(() => {
@@ -137,6 +141,7 @@ function AdminPageContent() {
         if (data.success) {
           setIsAuthenticated(true);
           loadConfig();
+          loadCurrentUser();
         }
       })
       .catch(() => {})
@@ -152,6 +157,18 @@ function AdminPageContent() {
       }
     } catch (error) {
       console.error('Failed to load config:', error);
+    }
+  };
+  
+  const loadCurrentUser = async () => {
+    try {
+      const response = await fetch('/api/auth/me', { cache: 'no-store' });
+      const data = await response.json();
+      if (data.success) {
+        setCurrentUser(data.data);
+      }
+    } catch (error) {
+      console.error('Failed to load user:', error);
     }
   };
 
@@ -176,6 +193,7 @@ function AdminPageContent() {
         } else {
           setIsAuthenticated(true);
           loadConfig();
+          loadCurrentUser();
         }
       } else {
         setLoginError(data.error || 'Login failed');
@@ -239,6 +257,7 @@ function AdminPageContent() {
         setMustResetPassword(false);
         setIsAuthenticated(true);
         loadConfig();
+        loadCurrentUser();
         showToast('Password updated successfully!');
       } else {
         setLoginError(data.error || 'Failed to reset password');
@@ -685,7 +704,7 @@ function AdminPageContent() {
         <div className="bg-white/3 rounded-2xl border border-white/10 p-8 animate-slide-in">
           {/* Branding Tab */}
           {activeTab === 'branding' && config && (
-            <BrandingTab config={config} onSave={saveConfig} isSaving={isSaving} accentColor={accentColor} primaryColor={primaryColor} />
+            <BrandingTab config={config} onSave={saveConfig} isSaving={isSaving} accentColor={accentColor} primaryColor={primaryColor} userSlug={currentUser?.slug} />
           )}
 
           {/* Calendar Tab */}
@@ -726,12 +745,13 @@ function AdminPageContent() {
 }
 
 // Branding Tab Component
-function BrandingTab({ config, onSave, isSaving, accentColor, primaryColor }: {
+function BrandingTab({ config, onSave, isSaving, accentColor, primaryColor, userSlug }: {
   config: Partial<SchedulerConfig>;
   onSave: (updates: Partial<SchedulerConfig>) => Promise<void>;
   isSaving: boolean;
   accentColor: string;
   primaryColor: string;
+  userSlug?: string;
 }) {
   const [local, setLocal] = useState({
     businessName: config.businessName || '',
@@ -739,6 +759,17 @@ function BrandingTab({ config, onSave, isSaving, accentColor, primaryColor }: {
     primaryColor: config.primaryColor || '#1a1a2e',
     accentColor: config.accentColor || '#4f46e5',
   });
+  const [copied, setCopied] = useState(false);
+  
+  const bookingUrl = userSlug ? `${typeof window !== 'undefined' ? window.location.origin : ''}/book/${userSlug}` : '';
+  
+  const copyBookingUrl = () => {
+    if (bookingUrl) {
+      navigator.clipboard.writeText(bookingUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -753,6 +784,42 @@ function BrandingTab({ config, onSave, isSaving, accentColor, primaryColor }: {
 
   return (
     <div className="space-y-8">
+      {/* Booking URL Section */}
+      {userSlug && (
+        <div className="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 rounded-2xl p-6 border border-indigo-500/20">
+          <label className="block text-white text-sm font-medium mb-2">Your Booking URL</label>
+          <p className="text-slate-400 text-sm mb-4">Share this link with clients to let them book appointments with you.</p>
+          <div className="flex items-center gap-3">
+            <input
+              type="text"
+              value={bookingUrl}
+              readOnly
+              className="flex-1 px-4 py-3 rounded-xl border border-white/15 bg-white/5 text-white font-mono text-sm"
+            />
+            <button
+              onClick={copyBookingUrl}
+              className="px-5 py-3 rounded-xl bg-indigo-600 text-white font-medium hover:bg-indigo-700 transition-colors flex items-center gap-2"
+            >
+              {copied ? (
+                <>
+                  <CheckIcon /> Copied!
+                </>
+              ) : (
+                'Copy Link'
+              )}
+            </button>
+            <a
+              href={bookingUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-5 py-3 rounded-xl border border-white/20 text-white font-medium hover:bg-white/10 transition-colors"
+            >
+              Preview
+            </a>
+          </div>
+        </div>
+      )}
+      
       <div>
         <label className="block text-slate-400 text-sm font-medium mb-3">Business Name</label>
         <input

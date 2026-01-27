@@ -1,4 +1,4 @@
-// Microsoft Graph API integration for Outlook Calendar
+// Microsoft Graph API integration for Outlook Calendar - Multi-tenant version
 import { ConfidentialClientApplication, AuthorizationCodeRequest, RefreshTokenRequest } from '@azure/msal-node';
 import { Client } from '@microsoft/microsoft-graph-client';
 import { MicrosoftTokens, OutlookEvent } from './types';
@@ -47,7 +47,7 @@ export function getAuthorizationUrl(state: string): string {
 }
 
 // Exchange authorization code for tokens
-export async function exchangeCodeForTokens(code: string): Promise<MicrosoftTokens> {
+export async function exchangeCodeForTokens(code: string, userId: string): Promise<MicrosoftTokens> {
   const client = getMsalClient();
   
   const tokenRequest: AuthorizationCodeRequest = {
@@ -69,29 +69,29 @@ export async function exchangeCodeForTokens(code: string): Promise<MicrosoftToke
     scope: response.scopes.join(' '),
   };
 
-  // Store tokens securely
-  await storeTokens(tokens);
+  // Store tokens for user
+  await storeTokens(userId, tokens);
 
   return tokens;
 }
 
-// Refresh access token
-export async function refreshAccessToken(): Promise<MicrosoftTokens | null> {
-  const storedTokens = await getStoredTokens();
+// Refresh access token for user
+export async function refreshAccessToken(userId: string): Promise<MicrosoftTokens | null> {
+  const storedTokens = await getStoredTokens(userId);
   
-  if (!storedTokens?.refreshToken) {
+  if (!storedTokens || !storedTokens.refreshToken) {
     return null;
   }
 
-  const client = getMsalClient();
-  
-  const refreshRequest: RefreshTokenRequest = {
-    refreshToken: storedTokens.refreshToken,
-    scopes: SCOPES,
-  };
-
   try {
-    const response = await client.acquireTokenByRefreshToken(refreshRequest);
+    const client = getMsalClient();
+    
+    const tokenRequest: RefreshTokenRequest = {
+      refreshToken: storedTokens.refreshToken,
+      scopes: SCOPES,
+    };
+
+    const response = await client.acquireTokenByRefreshToken(tokenRequest);
     
     if (!response) {
       return null;
@@ -104,39 +104,21 @@ export async function refreshAccessToken(): Promise<MicrosoftTokens | null> {
       scope: response.scopes.join(' '),
     };
 
-    await storeTokens(tokens);
+    await storeTokens(userId, tokens);
+
     return tokens;
   } catch (error) {
-    console.error('Failed to refresh token:', error);
+    console.error('Token refresh failed:', error);
     return null;
   }
 }
 
-// Get valid access token (refresh if needed)
-export async function getValidAccessToken(): Promise<string | null> {
-  let tokens = await getStoredTokens();
-  
-  if (!tokens) {
-    return null;
-  }
-
-  // Check if token is expired (with 5 minute buffer)
-  if (Date.now() > tokens.expiresAt - 300000) {
-    tokens = await refreshAccessToken();
-    if (!tokens) {
-      return null;
-    }
-  }
-
-  return tokens.accessToken;
-}
-
-// Store tokens in Neon PostgreSQL
-async function storeTokens(tokens: MicrosoftTokens): Promise<void> {
+// Store tokens in database for user
+async function storeTokens(userId: string, tokens: MicrosoftTokens): Promise<void> {
   await sql`
-    INSERT INTO microsoft_tokens (id, access_token, refresh_token, expires_at, scope)
-    VALUES (1, ${tokens.accessToken}, ${tokens.refreshToken}, ${tokens.expiresAt}, ${tokens.scope})
-    ON CONFLICT (id) DO UPDATE SET
+    INSERT INTO microsoft_tokens (user_id, access_token, refresh_token, expires_at, scope)
+    VALUES (${userId}::uuid, ${tokens.accessToken}, ${tokens.refreshToken}, ${tokens.expiresAt}, ${tokens.scope})
+    ON CONFLICT (user_id) DO UPDATE SET
       access_token = EXCLUDED.access_token,
       refresh_token = EXCLUDED.refresh_token,
       expires_at = EXCLUDED.expires_at,
@@ -145,37 +127,59 @@ async function storeTokens(tokens: MicrosoftTokens): Promise<void> {
   `;
 }
 
-// Get stored tokens from Neon PostgreSQL
-export async function getStoredTokens(): Promise<MicrosoftTokens | null> {
+// Get stored tokens from database for user
+export async function getStoredTokens(userId: string): Promise<MicrosoftTokens | null> {
   const result = await sql`
     SELECT access_token, refresh_token, expires_at, scope
     FROM microsoft_tokens
-    WHERE id = 1
+    WHERE user_id = ${userId}::uuid
   `;
-  
-  if (result.length === 0) return null;
-  
-  return {
-    accessToken: result[0].access_token,
-    refreshToken: result[0].refresh_token,
-    expiresAt: parseInt(result[0].expires_at),
-    scope: result[0].scope,
-  };
-}
 
-// Clear stored tokens
-export async function clearTokens(): Promise<void> {
-  await sql`DELETE FROM microsoft_tokens WHERE id = 1`;
-}
-
-// Create Microsoft Graph client
-export async function getGraphClient(): Promise<Client | null> {
-  const accessToken = await getValidAccessToken();
-  
-  if (!accessToken) {
+  if (result.length === 0) {
     return null;
   }
 
+  const row = result[0];
+  return {
+    accessToken: row.access_token,
+    refreshToken: row.refresh_token,
+    expiresAt: Number(row.expires_at),
+    scope: row.scope,
+  };
+}
+
+// Clear tokens for user
+export async function clearTokens(userId: string): Promise<void> {
+  await sql`DELETE FROM microsoft_tokens WHERE user_id = ${userId}::uuid`;
+}
+
+// Get valid access token for user (refreshes if needed)
+export async function getValidAccessToken(userId: string): Promise<string | null> {
+  let tokens = await getStoredTokens(userId);
+
+  if (!tokens) {
+    return null;
+  }
+
+  // Check if token is expired or about to expire (5 min buffer)
+  if (tokens.expiresAt < Date.now() + 300000) {
+    tokens = await refreshAccessToken(userId);
+    if (!tokens) {
+      return null;
+    }
+  }
+
+  return tokens.accessToken;
+}
+
+// Check if user is connected to Outlook
+export async function isConnected(userId: string): Promise<boolean> {
+  const tokens = await getStoredTokens(userId);
+  return !!tokens?.accessToken;
+}
+
+// Create Microsoft Graph client for user
+function createGraphClient(accessToken: string): Client {
   return Client.init({
     authProvider: (done) => {
       done(null, accessToken);
@@ -184,135 +188,153 @@ export async function getGraphClient(): Promise<Client | null> {
 }
 
 // Get user profile
-export async function getUserProfile(): Promise<any> {
-  const client = await getGraphClient();
+export async function getUserProfile(userId: string): Promise<{ email: string; displayName: string } | null> {
+  const accessToken = await getValidAccessToken(userId);
   
-  if (!client) {
-    throw new Error('Not authenticated with Microsoft');
+  if (!accessToken) {
+    return null;
   }
 
-  return client.api('/me').select('displayName,mail,userPrincipalName').get();
+  try {
+    const client = createGraphClient(accessToken);
+    const profile = await client.api('/me').get();
+    
+    return {
+      email: profile.mail || profile.userPrincipalName,
+      displayName: profile.displayName,
+    };
+  } catch (error) {
+    console.error('Failed to get user profile:', error);
+    return null;
+  }
 }
 
 // Create calendar event
-export async function createCalendarEvent(event: OutlookEvent): Promise<OutlookEvent> {
-  const client = await getGraphClient();
+export async function createCalendarEvent(userId: string, event: OutlookEvent): Promise<OutlookEvent | null> {
+  const accessToken = await getValidAccessToken(userId);
   
-  if (!client) {
-    throw new Error('Not authenticated with Microsoft');
+  if (!accessToken) {
+    console.log('No valid access token for user', userId);
+    return null;
   }
 
-  const createdEvent = await client.api('/me/calendar/events').post(event);
-  return createdEvent;
+  try {
+    const client = createGraphClient(accessToken);
+    const result = await client.api('/me/events').post(event);
+    
+    return {
+      ...event,
+      id: result.id,
+    };
+  } catch (error) {
+    console.error('Failed to create calendar event:', error);
+    return null;
+  }
 }
 
 // Update calendar event
-export async function updateCalendarEvent(eventId: string, event: Partial<OutlookEvent>): Promise<OutlookEvent> {
-  const client = await getGraphClient();
+export async function updateCalendarEvent(userId: string, eventId: string, event: Partial<OutlookEvent>): Promise<boolean> {
+  const accessToken = await getValidAccessToken(userId);
   
-  if (!client) {
-    throw new Error('Not authenticated with Microsoft');
+  if (!accessToken) {
+    return false;
   }
 
-  const updatedEvent = await client.api(`/me/calendar/events/${eventId}`).patch(event);
-  return updatedEvent;
+  try {
+    const client = createGraphClient(accessToken);
+    await client.api(`/me/events/${eventId}`).patch(event);
+    return true;
+  } catch (error) {
+    console.error('Failed to update calendar event:', error);
+    return false;
+  }
 }
 
 // Delete calendar event
-export async function deleteCalendarEvent(eventId: string): Promise<void> {
-  const client = await getGraphClient();
+export async function deleteCalendarEvent(userId: string, eventId: string): Promise<boolean> {
+  const accessToken = await getValidAccessToken(userId);
   
-  if (!client) {
-    throw new Error('Not authenticated with Microsoft');
+  if (!accessToken) {
+    return false;
   }
 
-  await client.api(`/me/calendar/events/${eventId}`).delete();
+  try {
+    const client = createGraphClient(accessToken);
+    await client.api(`/me/events/${eventId}`).delete();
+    return true;
+  } catch (error) {
+    console.error('Failed to delete calendar event:', error);
+    return false;
+  }
 }
 
-// Get calendar events for a date range
-export async function getCalendarEvents(startDate: string, endDate: string): Promise<OutlookEvent[]> {
-  const client = await getGraphClient();
+// Get free/busy schedule
+export async function getFreeBusySchedule(
+  userId: string,
+  startDate: string,
+  endDate: string,
+  timezone: string
+): Promise<Array<{ start: string; end: string }>> {
+  const accessToken = await getValidAccessToken(userId);
   
-  if (!client) {
-    throw new Error('Not authenticated with Microsoft');
+  if (!accessToken) {
+    return [];
   }
 
-  const response = await client
-    .api('/me/calendar/calendarView')
-    .query({
-      startDateTime: startDate,
-      endDateTime: endDate,
-    })
-    .select('id,subject,start,end,isCancelled')
-    .orderby('start/dateTime')
-    .get();
+  try {
+    const client = createGraphClient(accessToken);
+    
+    // Get calendar view for the date range
+    const events = await client
+      .api('/me/calendarView')
+      .query({
+        startDateTime: `${startDate}T00:00:00`,
+        endDateTime: `${endDate}T23:59:59`,
+        $select: 'start,end,showAs',
+      })
+      .header('Prefer', `outlook.timezone="${timezone}"`)
+      .get();
 
-  return response.value;
-}
+    // Filter to only busy times
+    const busyTimes = events.value
+      .filter((event: any) => event.showAs === 'busy' || event.showAs === 'tentative')
+      .map((event: any) => ({
+        start: event.start.dateTime,
+        end: event.end.dateTime,
+      }));
 
-// Get busy times for a date range
-export async function getFreeBusySchedule(startDate: string, endDate: string, timezone: string): Promise<any> {
-  const client = await getGraphClient();
-  
-  if (!client) {
-    throw new Error('Not authenticated with Microsoft');
+    return busyTimes;
+  } catch (error) {
+    console.error('Failed to get free/busy schedule:', error);
+    return [];
   }
-
-  const userProfile = await getUserProfile();
-  
-  const response = await client.api('/me/calendar/getSchedule').post({
-    schedules: [userProfile.mail || userProfile.userPrincipalName],
-    startTime: {
-      dateTime: startDate,
-      timeZone: timezone,
-    },
-    endTime: {
-      dateTime: endDate,
-      timeZone: timezone,
-    },
-    availabilityViewInterval: 15,
-  });
-
-  return response.value[0];
 }
 
-// Send email via Graph API
-export async function sendEmail(
-  to: string,
-  subject: string,
-  htmlContent: string,
-  toName?: string
-): Promise<void> {
-  const client = await getGraphClient();
+// Get all users with tokens (for token refresh cron job)
+export async function getAllUsersWithTokens(): Promise<string[]> {
+  const result = await sql`SELECT user_id FROM microsoft_tokens`;
+  return result.map(row => row.user_id);
+}
+
+// Refresh all tokens (for cron job)
+export async function refreshAllTokens(): Promise<{ success: number; failed: number }> {
+  const userIds = await getAllUsersWithTokens();
+  let success = 0;
+  let failed = 0;
   
-  if (!client) {
-    throw new Error('Not authenticated with Microsoft');
+  for (const userId of userIds) {
+    try {
+      const tokens = await refreshAccessToken(userId);
+      if (tokens) {
+        success++;
+      } else {
+        failed++;
+      }
+    } catch (error) {
+      console.error(`Failed to refresh token for user ${userId}:`, error);
+      failed++;
+    }
   }
-
-  const message = {
-    message: {
-      subject,
-      body: {
-        contentType: 'HTML',
-        content: htmlContent,
-      },
-      toRecipients: [
-        {
-          emailAddress: {
-            address: to,
-            name: toName || to,
-          },
-        },
-      ],
-    },
-    saveToSentItems: true,
-  };
-
-  await client.api('/me/sendMail').post(message);
-}
-
-// Check if connected to Microsoft
-export async function isConnected(): Promise<boolean> {
-  const tokens = await getStoredTokens();
-  return !!tokens?.accessToken;
+  
+  return { success, failed };
 }

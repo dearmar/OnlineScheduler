@@ -1,25 +1,43 @@
-// GET/PUT/DELETE /api/bookings/[id] - Single booking operations
+// GET/PUT/DELETE /api/bookings/[id] - Single booking operations (multi-tenant)
 import { NextRequest, NextResponse } from 'next/server';
-import { getBookingById, updateBooking, deleteBooking, getConfig } from '@/lib/storage';
+import { getBookingById, updateBooking, deleteBooking, getConfig, getUserIdFromBooking } from '@/lib/storage';
 import { deleteCalendarEvent, updateCalendarEvent, isConnected } from '@/lib/microsoft-graph';
 import { sendCancellationEmail } from '@/lib/email';
+import { getAuthenticatedUser } from '@/lib/auth';
 
-// Force dynamic for database operations
 export const dynamic = 'force-dynamic';
-import { sendBookingCancelledWebhook, sendBookingUpdatedWebhook } from '@/lib/webhooks';
 
-// GET - Get single booking
+// GET - Get booking details
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    const booking = await getBookingById(params.id);
+    const authUser = await getAuthenticatedUser(request);
+    
+    if (!authUser) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+    
+    const { id } = params;
+    const booking = await getBookingById(id);
     
     if (!booking) {
       return NextResponse.json(
         { success: false, error: 'Booking not found' },
         { status: 404 }
+      );
+    }
+    
+    // Verify ownership
+    const bookingUserId = await getUserIdFromBooking(id);
+    if (bookingUserId !== authUser.userId) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 403 }
       );
     }
     
@@ -42,9 +60,29 @@ export async function PUT(
   { params }: { params: { id: string } }
 ) {
   try {
-    const updates = await request.json();
+    const authUser = await getAuthenticatedUser(request);
     
-    const booking = await getBookingById(params.id);
+    if (!authUser) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+    
+    const { id } = params;
+    
+    // Verify ownership
+    const bookingUserId = await getUserIdFromBooking(id);
+    if (bookingUserId !== authUser.userId) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 403 }
+      );
+    }
+    
+    const updates = await request.json();
+    const booking = await getBookingById(id);
+    
     if (!booking) {
       return NextResponse.json(
         { success: false, error: 'Booking not found' },
@@ -52,45 +90,21 @@ export async function PUT(
       );
     }
     
-    const updatedBooking = await updateBooking(params.id, updates);
-    
-    if (!updatedBooking) {
-      return NextResponse.json(
-        { success: false, error: 'Failed to update booking' },
-        { status: 500 }
-      );
-    }
-    
-    // Update calendar event if connected
-    if (booking.outlookEventId && await isConnected()) {
-      try {
-        const config = await getConfig();
-        const [hours, minutes] = (updates.time || booking.time).split(':').map(Number);
-        const startDateTime = new Date(updates.date || booking.date);
-        startDateTime.setHours(hours, minutes, 0, 0);
-        
-        const endDateTime = new Date(startDateTime);
-        endDateTime.setMinutes(endDateTime.getMinutes() + (updates.duration || booking.duration));
-        
-        await updateCalendarEvent(booking.outlookEventId, {
-          subject: `${updatedBooking.meetingType}: ${updatedBooking.clientName}`,
+    // Update calendar event if Outlook is connected
+    if (booking.outlookEventId && await isConnected(authUser.userId)) {
+      const config = await getConfig(authUser.userId);
+      
+      if (updates.date || updates.time) {
+        await updateCalendarEvent(authUser.userId, booking.outlookEventId, {
           start: {
-            dateTime: startDateTime.toISOString(),
-            timeZone: config.timezone,
-          },
-          end: {
-            dateTime: endDateTime.toISOString(),
+            dateTime: `${updates.date || booking.date}T${updates.time || booking.time}:00`,
             timeZone: config.timezone,
           },
         });
-      } catch (calendarError) {
-        console.error('Failed to update calendar event:', calendarError);
       }
     }
     
-    // Send webhook
-    const config = await getConfig();
-    await sendBookingUpdatedWebhook(updatedBooking, config);
+    const updatedBooking = await updateBooking(id, updates);
     
     return NextResponse.json({
       success: true,
@@ -111,7 +125,27 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
-    const booking = await getBookingById(params.id);
+    const authUser = await getAuthenticatedUser(request);
+    
+    if (!authUser) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+    
+    const { id } = params;
+    
+    // Verify ownership
+    const bookingUserId = await getUserIdFromBooking(id);
+    if (bookingUserId !== authUser.userId) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 403 }
+      );
+    }
+    
+    const booking = await getBookingById(id);
     
     if (!booking) {
       return NextResponse.json(
@@ -120,28 +154,21 @@ export async function DELETE(
       );
     }
     
-    // Delete calendar event if exists
-    if (booking.outlookEventId && await isConnected()) {
-      try {
-        await deleteCalendarEvent(booking.outlookEventId);
-      } catch (calendarError) {
-        console.error('Failed to delete calendar event:', calendarError);
-      }
+    // Delete calendar event if Outlook is connected
+    if (booking.outlookEventId && await isConnected(authUser.userId)) {
+      await deleteCalendarEvent(authUser.userId, booking.outlookEventId);
     }
+    
+    // Cancel booking in database
+    await deleteBooking(id);
     
     // Send cancellation email
-    const config = await getConfig();
     try {
+      const config = await getConfig(authUser.userId);
       await sendCancellationEmail(booking, config);
     } catch (emailError) {
-      console.error('Failed to send cancellation email:', emailError);
+      console.error('Email error:', emailError);
     }
-    
-    // Send webhook
-    await sendBookingCancelledWebhook(booking, config);
-    
-    // Delete the booking
-    await deleteBooking(params.id);
     
     return NextResponse.json({
       success: true,

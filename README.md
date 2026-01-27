@@ -1,10 +1,15 @@
 # Calendar Scheduler
 
-A production-ready appointment scheduling application built with Next.js 14, designed for deployment on Vercel with Neon PostgreSQL. Features Microsoft Outlook integration, email notifications, admin authentication, and webhook support.
+A production-ready multi-tenant appointment scheduling application built with Next.js 14, designed for deployment on Vercel with Neon PostgreSQL. Features per-user booking pages, Microsoft Outlook integration, email notifications, admin authentication, and webhook support.
 
 ![Calendar Scheduler](https://via.placeholder.com/800x400?text=Calendar+Scheduler)
 
 ## Features
+
+### Multi-Tenant Architecture
+- **Individual Booking Pages**: Each admin user gets their own unique booking URL (`/book/username`)
+- **Isolated Configuration**: Branding, meeting types, and calendar settings are per-user
+- **Separate Outlook Connections**: Each admin connects their own Microsoft account
 
 ### User Booking Interface
 - **3-Step Booking Flow**: Select meeting type → Choose date/time → Enter details
@@ -18,10 +23,11 @@ A production-ready appointment scheduling application built with Next.js 14, des
 - **Multi-User Support**: Add and manage multiple admin users
 - **Password Reset Flow**: Email-based password reset with temporary passwords
 - **Forced Password Change**: New users must set their own password on first login
-- **Branding Customization**: Business name, logo, and color scheme
-- **Calendar Settings**: Business hours and timezone configuration
-- **Meeting Type Management**: Create, edit, and delete meeting types with custom durations
-- **Microsoft Outlook Connection**: OAuth 2.0 integration for calendar sync
+- **Branding Customization**: Business name, logo, and color scheme (per user)
+- **Calendar Settings**: Business hours and timezone configuration (per user)
+- **Meeting Type Management**: Create, edit, and delete meeting types with custom durations (per user)
+- **Microsoft Outlook Connection**: OAuth 2.0 integration for calendar sync (per user)
+- **Booking URL Display**: Easy-to-copy booking link shown in admin dashboard
 
 ### Integrations
 - **Microsoft Graph API**: Full Outlook calendar read/write access
@@ -160,45 +166,47 @@ Or connect your GitHub repo to Vercel for automatic deployments.
 
 **Important**: Add your Neon DATABASE_URL to Vercel environment variables, or use the [Neon Vercel Integration](https://vercel.com/integrations/neon) for automatic configuration.
 
+## URL Structure
+
+| URL | Description |
+|-----|-------------|
+| `/` | Landing page listing all schedulers |
+| `/book/{slug}` | User-specific booking page (e.g., `/book/john-smith`) |
+| `/admin` | Admin login and dashboard |
+
+Each admin user gets a unique slug (URL-friendly identifier) based on their name. The booking page at `/book/{slug}` displays that user's branding, meeting types, and availability.
+
 ## Database Schema
 
-The application uses the following PostgreSQL tables:
+The application uses the following PostgreSQL tables (multi-tenant):
 
 ```sql
--- Admin users for authentication
-admin_users (id, email, name, password_hash, must_reset_password, reset_token, reset_token_expires, created_by, created_at, last_login)
+-- Admin users for authentication (each has their own scheduler)
+admin_users (id, email, name, slug, password_hash, must_reset_password, reset_token, reset_token_expires, created_by, created_at, last_login)
 
--- Global scheduler configuration (single row)
-scheduler_config (business_name, logo, colors, hours, timezone, outlook_connected)
+-- Scheduler configuration (per user)
+scheduler_config (id, user_id, business_name, logo, colors, hours, timezone, outlook_connected)
 
--- Meeting types available for booking
-meeting_types (id, name, duration, description, color, sort_order, is_active)
+-- Meeting types available for booking (per user)
+meeting_types (id, user_id, name, duration, description, color, sort_order, is_active)
 
--- All customer bookings
-bookings (id, date, time, duration, meeting_type, client_name, client_email, notes, status)
+-- All customer bookings (per user)
+bookings (id, user_id, date, time, duration, meeting_type, client_name, client_email, notes, status)
 
--- Microsoft OAuth tokens (single row)
-microsoft_tokens (access_token, refresh_token, expires_at, scope)
+-- Microsoft OAuth tokens (per user)
+microsoft_tokens (id, user_id, access_token, refresh_token, expires_at, scope)
 
--- External webhook subscriptions
-webhook_subscriptions (id, url, events, secret, is_active)
+-- External webhook subscriptions (per user)
+webhook_subscriptions (id, user_id, url, events, secret, is_active)
 ```
 
-### Upgrading from Previous Versions
+### Upgrading from Single-Tenant to Multi-Tenant
 
-If you have an existing installation, run the migration script in your Neon SQL Editor:
-
-```sql
--- Add new columns for user management
-ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS name VARCHAR(255);
-ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS must_reset_password BOOLEAN DEFAULT FALSE;
-ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(64);
-ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMP WITH TIME ZONE;
-ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL;
-
--- Update existing user to have a name
-UPDATE admin_users SET name = 'Admin' WHERE name IS NULL;
-```
+If you have an existing single-tenant installation, run the migration script `migration-multi-tenant.sql` in your Neon SQL Editor. This will:
+1. Add `slug` column to admin_users
+2. Add `user_id` columns to all tables
+3. Migrate existing data to the first admin user
+4. Create necessary indexes
 
 ## Configuration
 
@@ -236,9 +244,10 @@ UPDATE admin_users SET name = 'Admin' WHERE name IS NULL;
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/config` | Get public scheduler configuration |
-| GET | `/api/availability?date=YYYY-MM-DD&duration=30` | Get available time slots |
-| POST | `/api/bookings` | Create a new booking |
+| GET | `/api/schedulers` | List all public schedulers |
+| GET | `/api/config?user={slug}` | Get user's public scheduler configuration |
+| GET | `/api/availability?user={slug}&date=YYYY-MM-DD&duration=30` | Get available time slots |
+| POST | `/api/bookings` | Create a new booking (body includes `user` field) |
 
 ### Admin Endpoints (Require Authentication)
 
@@ -247,12 +256,16 @@ UPDATE admin_users SET name = 'Admin' WHERE name IS NULL;
 | POST | `/api/auth/login` | Admin login |
 | POST | `/api/auth/logout` | Admin logout |
 | GET | `/api/auth/verify` | Verify auth token |
+| GET | `/api/auth/me` | Get current user info |
 | POST | `/api/auth/change-password` | Change admin password |
 | POST | `/api/auth/forgot-password` | Request password reset email |
 | POST | `/api/auth/reset-password` | Reset password with token |
 | POST | `/api/auth/set-password` | Set new password (forced reset) |
-| PUT | `/api/config` | Update configuration |
-| GET | `/api/bookings` | List all bookings |
+| GET | `/api/config` | Get authenticated user's configuration |
+| PUT | `/api/config` | Update authenticated user's configuration |
+| GET | `/api/bookings` | List authenticated user's bookings |
+| GET | `/api/bookings/[id]` | Get booking details |
+| PUT | `/api/bookings/[id]` | Update a booking |
 | DELETE | `/api/bookings/[id]` | Cancel a booking |
 | GET | `/api/admin/users` | List all admin users |
 | POST | `/api/admin/users` | Create new admin user |
@@ -335,25 +348,38 @@ scheduler-app/
 ├── app/
 │   ├── api/
 │   │   ├── auth/           # Authentication endpoints
+│   │   │   ├── login/
+│   │   │   ├── logout/
+│   │   │   ├── verify/
+│   │   │   ├── me/         # Current user info
+│   │   │   ├── microsoft/  # OAuth initiation
+│   │   │   ├── callback/   # OAuth callback
+│   │   │   └── ...
+│   │   ├── admin/users/    # User management
 │   │   ├── bookings/       # Booking CRUD
 │   │   ├── config/         # Configuration
+│   │   ├── schedulers/     # List public schedulers
 │   │   ├── availability/   # Time slot availability
 │   │   ├── webhooks/       # Webhook handlers
 │   │   └── cron/           # Scheduled tasks
 │   ├── admin/
 │   │   └── page.tsx        # Admin dashboard
-│   ├── page.tsx            # Booking interface
+│   ├── book/
+│   │   └── [slug]/
+│   │       └── page.tsx    # User-specific booking page
+│   ├── page.tsx            # Landing page (scheduler list)
 │   ├── layout.tsx          # Root layout
 │   └── globals.css         # Global styles
 ├── lib/
 │   ├── db/
 │   │   ├── client.ts       # Neon database client
-│   │   ├── schema.sql      # Database schema
-│   │   └── migrate.ts      # Migration script
+│   │   ├── schema.sql      # Database schema (multi-tenant)
+│   │   ├── migration-multi-tenant.sql  # Migration script
+│   │   └── migrate.ts      # Migration runner
 │   ├── auth.ts             # Authentication utilities
 │   ├── email.ts            # Email service
-│   ├── microsoft-graph.ts  # Microsoft Graph API
-│   ├── storage.ts          # Database operations
+│   ├── microsoft-graph.ts  # Microsoft Graph API (multi-tenant)
+│   ├── storage.ts          # Database operations (multi-tenant)
 │   ├── types.ts            # TypeScript definitions
 │   └── webhooks.ts         # Webhook utilities
 ├── .env.example            # Environment template

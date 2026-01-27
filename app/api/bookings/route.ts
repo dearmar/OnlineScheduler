@@ -1,30 +1,27 @@
-// GET/POST /api/bookings - Bookings management
+// GET/POST /api/bookings - Bookings management (multi-tenant)
 import { NextRequest, NextResponse } from 'next/server';
-import { getBookings, addBooking, getConfig, isSlotAvailable } from '@/lib/storage';
+import { getBookings, addBooking, getConfig, isSlotAvailable, getUserBySlugOrId } from '@/lib/storage';
 import { createCalendarEvent, isConnected } from '@/lib/microsoft-graph';
 import { sendBookingEmails } from '@/lib/email';
 import { sendBookingCreatedWebhook } from '@/lib/webhooks';
 import { OutlookEvent } from '@/lib/types';
+import { getAuthenticatedUser } from '@/lib/auth';
 
-// Force dynamic to allow POST requests
 export const dynamic = 'force-dynamic';
 
-// GET - Retrieve all bookings
+// GET - Retrieve all bookings (admin only)
 export async function GET(request: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const date = searchParams.get('date');
-    const startDate = searchParams.get('startDate');
-    const endDate = searchParams.get('endDate');
+    const authUser = await getAuthenticatedUser(request);
     
-    let bookings = await getBookings();
-    
-    // Filter by date if provided
-    if (date) {
-      bookings = bookings.filter(b => b.date === date);
-    } else if (startDate && endDate) {
-      bookings = bookings.filter(b => b.date >= startDate && b.date <= endDate);
+    if (!authUser) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 }
+      );
     }
+    
+    const bookings = await getBookings(authUser.userId);
     
     return NextResponse.json({
       success: true,
@@ -39,11 +36,27 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST - Create a new booking
+// POST - Create a new booking (public)
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { date, time, duration, meetingType, clientName, clientEmail, notes } = body;
+    const { user: userParam, date, time, duration, meetingType, clientName, clientEmail, notes } = body;
+    
+    if (!userParam) {
+      return NextResponse.json(
+        { success: false, error: 'User parameter required' },
+        { status: 400 }
+      );
+    }
+    
+    // Get user
+    const user = await getUserBySlugOrId(userParam);
+    if (!user) {
+      return NextResponse.json(
+        { success: false, error: 'User not found' },
+        { status: 404 }
+      );
+    }
     
     // Validate required fields
     if (!date || !time || !duration || !meetingType || !clientName || !clientEmail) {
@@ -62,8 +75,8 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Check if slot is available
-    const available = await isSlotAvailable(date, time, duration);
+    // Check if slot is still available
+    const available = await isSlotAvailable(user.id, date, time, duration);
     if (!available) {
       return NextResponse.json(
         { success: false, error: 'This time slot is no longer available' },
@@ -71,11 +84,52 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Get config for email and calendar
-    const config = await getConfig();
+    // Get config for calendar event and emails
+    const config = await getConfig(user.id);
     
-    // Create the booking
-    const booking = await addBooking({
+    // Create calendar event if Outlook is connected
+    let outlookEventId: string | undefined;
+    if (await isConnected(user.id)) {
+      const [hours, minutes] = time.split(':').map(Number);
+      const endHours = hours + Math.floor((minutes + duration) / 60);
+      const endMinutes = (minutes + duration) % 60;
+      const endTime = `${endHours.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`;
+      
+      const event: OutlookEvent = {
+        subject: `${meetingType} with ${clientName}`,
+        body: {
+          contentType: 'HTML',
+          content: `<p>Meeting booked via ${config.businessName}</p><p><strong>Client:</strong> ${clientName} (${clientEmail})</p>${notes ? `<p><strong>Notes:</strong> ${notes}</p>` : ''}`,
+        },
+        start: {
+          dateTime: `${date}T${time}:00`,
+          timeZone: config.timezone,
+        },
+        end: {
+          dateTime: `${date}T${endTime}:00`,
+          timeZone: config.timezone,
+        },
+        attendees: [
+          {
+            emailAddress: {
+              address: clientEmail,
+              name: clientName,
+            },
+            type: 'required',
+          },
+        ],
+        isOnlineMeeting: true,
+        onlineMeetingProvider: 'teamsForBusiness',
+      };
+      
+      const createdEvent = await createCalendarEvent(user.id, event);
+      if (createdEvent?.id) {
+        outlookEventId = createdEvent.id;
+      }
+    }
+    
+    // Save booking to database
+    const booking = await addBooking(user.id, {
       date,
       time,
       duration,
@@ -83,87 +137,26 @@ export async function POST(request: NextRequest) {
       clientName,
       clientEmail,
       notes,
+      outlookEventId,
     });
-    
-    // Create calendar event if Outlook is connected
-    if (await isConnected() && process.env.ENABLE_CALENDAR_SYNC === 'true') {
-      try {
-        // Calculate end time
-        const [hours, minutes] = time.split(':').map(Number);
-        const endMinutes = hours * 60 + minutes + duration;
-        const endHours = Math.floor(endMinutes / 60);
-        const endMins = endMinutes % 60;
-        const endTime = `${endHours.toString().padStart(2, '0')}:${endMins.toString().padStart(2, '0')}`;
-        
-        // Use local time format (NOT ISO/UTC) since we're specifying timezone separately
-        const calendarEvent: OutlookEvent = {
-          subject: `${meetingType}: ${clientName}`,
-          body: {
-            contentType: 'HTML',
-            content: `
-              <h2>Meeting Details</h2>
-              <p><strong>Client:</strong> ${clientName}</p>
-              <p><strong>Email:</strong> ${clientEmail}</p>
-              <p><strong>Type:</strong> ${meetingType}</p>
-              <p><strong>Duration:</strong> ${duration} minutes</p>
-              ${notes ? `<p><strong>Notes:</strong> ${notes}</p>` : ''}
-              <hr>
-              <p><em>Booked via Calendar Scheduler</em></p>
-            `,
-          },
-          start: {
-            dateTime: `${date}T${time}:00`,
-            timeZone: config.timezone,
-          },
-          end: {
-            dateTime: `${date}T${endTime}:00`,
-            timeZone: config.timezone,
-          },
-          attendees: [
-            {
-              emailAddress: {
-                address: clientEmail,
-                name: clientName,
-              },
-              type: 'required',
-            },
-          ],
-          isOnlineMeeting: true,
-          onlineMeetingProvider: 'teamsForBusiness',
-        };
-        
-        const createdEvent = await createCalendarEvent(calendarEvent);
-        
-        // Update booking with Outlook event ID
-        if (createdEvent.id) {
-          booking.outlookEventId = createdEvent.id;
-        }
-      } catch (calendarError) {
-        console.error('Failed to create calendar event:', calendarError);
-        // Continue without failing the booking
-      }
-    }
     
     // Send confirmation emails
     try {
       await sendBookingEmails(booking, config);
     } catch (emailError) {
-      console.error('Failed to send emails:', emailError);
-      // Continue without failing the booking
+      console.error('Email error:', emailError);
     }
     
-    // Send webhook notification
+    // Send webhook
     try {
-      await sendBookingCreatedWebhook(booking, config);
+      await sendBookingCreatedWebhook(user.id, booking, config);
     } catch (webhookError) {
-      console.error('Failed to send webhook:', webhookError);
-      // Continue without failing the booking
+      console.error('Webhook error:', webhookError);
     }
     
     return NextResponse.json({
       success: true,
       data: booking,
-      message: 'Booking created successfully',
     });
   } catch (error) {
     console.error('Create booking error:', error);

@@ -1,19 +1,42 @@
-// GET/PUT /api/config - Scheduler configuration
+// GET/PUT /api/config - Scheduler configuration (multi-tenant)
 import { NextRequest, NextResponse } from 'next/server';
-import { getConfig, updateConfig } from '@/lib/storage';
+import { getConfig, updateConfig, getUserBySlugOrId } from '@/lib/storage';
 import { isConnected } from '@/lib/microsoft-graph';
+import { getAuthenticatedUser } from '@/lib/auth';
 
-// Force dynamic to allow PUT requests
 export const dynamic = 'force-dynamic';
 
-// GET - Retrieve configuration (public, but sensitive data filtered)
+// GET - Retrieve configuration (public for booking, or admin's own)
 export async function GET(request: NextRequest) {
   try {
-    const config = await getConfig();
-    const outlookConnected = await isConnected();
+    const userParam = request.nextUrl.searchParams.get('user');
+    let userId: string | null = null;
     
-    // Return config with updated connection status
-    // Filter out booked slots for public view
+    if (userParam) {
+      // Public access by slug or ID
+      const user = await getUserBySlugOrId(userParam);
+      if (!user) {
+        return NextResponse.json(
+          { success: false, error: 'User not found' },
+          { status: 404 }
+        );
+      }
+      userId = user.id;
+    } else {
+      // Admin access - use authenticated user
+      const authUser = await getAuthenticatedUser(request);
+      if (!authUser) {
+        return NextResponse.json(
+          { success: false, error: 'User parameter required or authentication needed' },
+          { status: 400 }
+        );
+      }
+      userId = authUser.userId;
+    }
+    
+    const config = await getConfig(userId);
+    const outlookConnected = await isConnected(userId);
+    
     const publicConfig = {
       businessName: config.businessName,
       logo: config.logo,
@@ -31,7 +54,6 @@ export async function GET(request: NextRequest) {
       data: publicConfig,
     });
     
-    // Prevent caching
     response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     response.headers.set('Pragma', 'no-cache');
     response.headers.set('Expires', '0');
@@ -49,13 +71,14 @@ export async function GET(request: NextRequest) {
 // PUT - Update configuration (requires authentication)
 export async function PUT(request: NextRequest) {
   try {
-    // Note: Add authentication check in production
-    // if (!(await isAuthenticated(request))) {
-    //   return NextResponse.json(
-    //     { success: false, error: 'Unauthorized' },
-    //     { status: 401 }
-    //   );
-    // }
+    const authUser = await getAuthenticatedUser(request);
+    
+    if (!authUser) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
     
     const updates = await request.json();
     
@@ -81,7 +104,7 @@ export async function PUT(request: NextRequest) {
       );
     }
     
-    const newConfig = await updateConfig(updates);
+    const newConfig = await updateConfig(authUser.userId, updates);
     
     return NextResponse.json({
       success: true,

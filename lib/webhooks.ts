@@ -71,6 +71,7 @@ export async function sendWebhook(
 
 // Send booking created webhook
 export async function sendBookingCreatedWebhook(
+  userId: string,
   booking: BookedSlot,
   config: Partial<SchedulerConfig>
 ): Promise<void> {
@@ -79,6 +80,7 @@ export async function sendBookingCreatedWebhook(
 
 // Send booking cancelled webhook
 export async function sendBookingCancelledWebhook(
+  userId: string,
   booking: BookedSlot,
   config: Partial<SchedulerConfig>
 ): Promise<void> {
@@ -87,6 +89,7 @@ export async function sendBookingCancelledWebhook(
 
 // Send booking updated webhook
 export async function sendBookingUpdatedWebhook(
+  userId: string,
   booking: BookedSlot,
   config: Partial<SchedulerConfig>
 ): Promise<void> {

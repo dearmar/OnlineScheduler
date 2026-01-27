@@ -26,6 +26,7 @@ export async function GET(request: NextRequest) {
         id: u.id,
         email: u.email,
         name: u.name,
+        slug: u.slug,
         mustResetPassword: u.mustResetPassword,
         createdAt: u.createdAt,
         lastLogin: u.lastLogin,
@@ -73,9 +74,9 @@ export async function POST(request: NextRequest) {
     // Create user with temp password
     const { user, tempPassword } = await createAdminUser(email, name, authUser.userId);
     
-    // Send welcome email with temp password
+    // Send welcome email with temp password (use creator's config for branding)
     try {
-      const config = await getConfig();
+      const config = await getConfig(authUser.userId);
       await sendNewUserEmail(email, name, tempPassword, config);
     } catch (emailError) {
       console.error('Failed to send welcome email:', emailError);
@@ -88,6 +89,7 @@ export async function POST(request: NextRequest) {
         id: user.id,
         email: user.email,
         name: user.name,
+        slug: user.slug,
         tempPassword, // Return temp password so admin can share it if email fails
       },
       message: 'User created successfully. Temporary password has been sent via email.',

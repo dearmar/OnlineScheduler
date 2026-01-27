@@ -39,6 +39,7 @@ export interface AdminUser {
   id: string;
   email: string;
   name?: string;
+  slug?: string;
   passwordHash: string;
   mustResetPassword?: boolean;
   resetToken?: string;

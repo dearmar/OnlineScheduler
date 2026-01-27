@@ -1,4 +1,4 @@
-// Admin authentication utilities
+// Admin authentication utilities - Multi-tenant version
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
@@ -6,6 +6,7 @@ import { sql } from './db/client';
 import { AdminUser, TokenPayload } from './types';
 import { v4 as uuidv4 } from 'uuid';
 import { NextRequest } from 'next/server';
+import { ensureUserConfig } from './storage';
 
 const JWT_SECRET = process.env.JWT_SECRET!;
 const TOKEN_EXPIRY = '7d';
@@ -53,10 +54,38 @@ export function generateResetToken(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
+// Generate slug from name
+export function generateSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .trim();
+}
+
+// Ensure slug is unique
+async function ensureUniqueSlug(baseSlug: string, excludeId?: string): Promise<string> {
+  let slug = baseSlug;
+  let counter = 1;
+  
+  while (true) {
+    const query = excludeId
+      ? await sql`SELECT id FROM admin_users WHERE slug = ${slug} AND id != ${excludeId}::uuid`
+      : await sql`SELECT id FROM admin_users WHERE slug = ${slug}`;
+    
+    if (query.length === 0) break;
+    slug = `${baseSlug}-${counter}`;
+    counter++;
+  }
+  
+  return slug;
+}
+
 // Get all admin users
 export async function getAllAdminUsers(): Promise<AdminUser[]> {
   const result = await sql`
-    SELECT id, email, name, must_reset_password, created_by, created_at, last_login
+    SELECT id, email, name, slug, must_reset_password, created_by, created_at, last_login
     FROM admin_users
     ORDER BY created_at DESC
   `;
@@ -65,6 +94,7 @@ export async function getAllAdminUsers(): Promise<AdminUser[]> {
     id: user.id,
     email: user.email,
     name: user.name,
+    slug: user.slug,
     passwordHash: '',
     mustResetPassword: user.must_reset_password,
     createdBy: user.created_by,
@@ -76,7 +106,7 @@ export async function getAllAdminUsers(): Promise<AdminUser[]> {
 // Get admin user by ID
 export async function getAdminUserById(id: string): Promise<AdminUser | null> {
   const result = await sql`
-    SELECT id, email, name, password_hash, must_reset_password, reset_token, reset_token_expires, created_by, created_at, last_login
+    SELECT id, email, name, slug, password_hash, must_reset_password, reset_token, reset_token_expires, created_by, created_at, last_login
     FROM admin_users
     WHERE id = ${id}::uuid
   `;
@@ -88,6 +118,7 @@ export async function getAdminUserById(id: string): Promise<AdminUser | null> {
     id: user.id,
     email: user.email,
     name: user.name,
+    slug: user.slug,
     passwordHash: user.password_hash,
     mustResetPassword: user.must_reset_password,
     resetToken: user.reset_token,
@@ -101,7 +132,7 @@ export async function getAdminUserById(id: string): Promise<AdminUser | null> {
 // Get admin user by email
 export async function getAdminUserByEmail(email: string): Promise<AdminUser | null> {
   const result = await sql`
-    SELECT id, email, name, password_hash, must_reset_password, reset_token, reset_token_expires, created_by, created_at, last_login
+    SELECT id, email, name, slug, password_hash, must_reset_password, reset_token, reset_token_expires, created_by, created_at, last_login
     FROM admin_users
     WHERE email = ${email}
   `;
@@ -113,6 +144,7 @@ export async function getAdminUserByEmail(email: string): Promise<AdminUser | nu
     id: user.id,
     email: user.email,
     name: user.name,
+    slug: user.slug,
     passwordHash: user.password_hash,
     mustResetPassword: user.must_reset_password,
     resetToken: user.reset_token,
@@ -126,7 +158,7 @@ export async function getAdminUserByEmail(email: string): Promise<AdminUser | nu
 // Get first admin user (for backwards compatibility)
 export async function getAdminUser(): Promise<AdminUser | null> {
   const result = await sql`
-    SELECT id, email, name, password_hash, must_reset_password, created_at, last_login
+    SELECT id, email, name, slug, password_hash, must_reset_password, created_at, last_login
     FROM admin_users
     LIMIT 1
   `;
@@ -138,6 +170,7 @@ export async function getAdminUser(): Promise<AdminUser | null> {
     id: user.id,
     email: user.email,
     name: user.name,
+    slug: user.slug,
     passwordHash: user.password_hash,
     mustResetPassword: user.must_reset_password,
     createdAt: user.created_at,
@@ -148,11 +181,12 @@ export async function getAdminUser(): Promise<AdminUser | null> {
 // Save admin user to database
 export async function saveAdminUser(user: AdminUser): Promise<void> {
   await sql`
-    INSERT INTO admin_users (id, email, name, password_hash, must_reset_password, created_by, created_at, last_login)
-    VALUES (${user.id}::uuid, ${user.email}, ${user.name || null}, ${user.passwordHash}, ${user.mustResetPassword || false}, ${user.createdBy || null}::uuid, ${user.createdAt}, ${user.lastLogin || null})
+    INSERT INTO admin_users (id, email, name, slug, password_hash, must_reset_password, created_by, created_at, last_login)
+    VALUES (${user.id}::uuid, ${user.email}, ${user.name || null}, ${user.slug || null}, ${user.passwordHash}, ${user.mustResetPassword || false}, ${user.createdBy || null}::uuid, ${user.createdAt}, ${user.lastLogin || null})
     ON CONFLICT (id) DO UPDATE SET
       email = EXCLUDED.email,
       name = EXCLUDED.name,
+      slug = EXCLUDED.slug,
       password_hash = EXCLUDED.password_hash,
       must_reset_password = EXCLUDED.must_reset_password,
       last_login = EXCLUDED.last_login
@@ -168,11 +202,13 @@ export async function createAdminUser(email: string, name: string, createdById: 
   
   const tempPassword = generateRandomPassword();
   const passwordHash = await hashPassword(tempPassword);
+  const slug = await ensureUniqueSlug(generateSlug(name));
   
   const newUser: AdminUser = {
     id: uuidv4(),
     email,
     name,
+    slug,
     passwordHash,
     mustResetPassword: true,
     createdBy: createdById,
@@ -181,7 +217,17 @@ export async function createAdminUser(email: string, name: string, createdById: 
   
   await saveAdminUser(newUser);
   
+  // Create default config for new user
+  await ensureUserConfig(newUser.id);
+  
   return { user: newUser, tempPassword };
+}
+
+// Update user slug
+export async function updateUserSlug(userId: string, newSlug: string): Promise<string> {
+  const slug = await ensureUniqueSlug(generateSlug(newSlug), userId);
+  await sql`UPDATE admin_users SET slug = ${slug} WHERE id = ${userId}::uuid`;
+  return slug;
 }
 
 // Delete admin user
@@ -206,17 +252,21 @@ export async function ensureAdminUser(): Promise<void> {
   if (!existingUser) {
     const initialPassword = process.env.ADMIN_INITIAL_PASSWORD || 'changeme123';
     const passwordHash = await hashPassword(initialPassword);
+    const name = 'Admin';
+    const slug = await ensureUniqueSlug(generateSlug(name));
     
     const adminUser: AdminUser = {
       id: uuidv4(),
       email: process.env.ADMIN_EMAIL || 'admin@example.com',
-      name: 'Admin',
+      name,
+      slug,
       passwordHash,
       mustResetPassword: false,
       createdAt: new Date().toISOString(),
     };
     
     await saveAdminUser(adminUser);
+    await ensureUserConfig(adminUser.id);
     console.log('Initial admin user created');
   }
 }
@@ -263,7 +313,7 @@ export async function setPasswordResetToken(email: string): Promise<{ resetToken
   return { resetToken, user };
 }
 
-// Reset password with token (from email link)
+// Reset password with token
 export async function resetPasswordWithToken(token: string, newPassword: string): Promise<boolean> {
   const result = await sql`
     SELECT id, email, reset_token_expires
@@ -293,7 +343,7 @@ export async function resetPasswordWithToken(token: string, newPassword: string)
   return true;
 }
 
-// Reset password on login (with temp password)
+// Reset password on login
 export async function resetPasswordOnLogin(userId: string, tempPassword: string, newPassword: string): Promise<string> {
   const user = await getAdminUserById(userId);
   
@@ -315,11 +365,10 @@ export async function resetPasswordOnLogin(userId: string, tempPassword: string,
     WHERE id = ${userId}::uuid
   `;
   
-  // Generate new token without mustResetPassword flag
   return generateToken(user.id, user.email, false);
 }
 
-// Change admin password (when logged in)
+// Change admin password
 export async function changePassword(userId: string, oldPassword: string, newPassword: string): Promise<boolean> {
   const user = await getAdminUserById(userId);
   
@@ -344,7 +393,7 @@ export async function changePassword(userId: string, oldPassword: string, newPas
   return true;
 }
 
-// Middleware helper to get authenticated user from request
+// Get authenticated user from request
 export async function getAuthenticatedUser(request: NextRequest): Promise<TokenPayload | null> {
   const cookieToken = request.cookies.get('auth_token')?.value;
   if (cookieToken) {

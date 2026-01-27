@@ -22,7 +22,8 @@ export async function POST(request: NextRequest) {
     
     if (result) {
       try {
-        const config = await getConfig();
+        // Get the user's own config for branding
+        const config = await getConfig(result.user.id);
         const resetUrl = `${process.env.NEXT_PUBLIC_APP_URL || ''}/admin?reset=${result.resetToken}`;
         await sendPasswordResetEmail(result.user.email, result.user.name || 'Admin', resetUrl, config);
       } catch (emailError) {
