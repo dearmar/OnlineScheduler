@@ -1,7 +1,7 @@
 // GET/POST /api/bookings - Bookings management (multi-tenant)
 import { NextRequest, NextResponse } from 'next/server';
 import { getBookings, addBooking, getConfig, isSlotAvailable, getUserBySlugOrId } from '@/lib/storage';
-import { createCalendarEvent, isConnected } from '@/lib/microsoft-graph';
+import { createCalendarEvent, isConnected, getWindowsTimezone } from '@/lib/microsoft-graph';
 import { sendBookingEmails } from '@/lib/email';
 import { sendBookingCreatedWebhook } from '@/lib/webhooks';
 import { OutlookEvent } from '@/lib/types';
@@ -95,6 +95,9 @@ export async function POST(request: NextRequest) {
       const endMinutes = (minutes + duration) % 60;
       const endTime = `${endHours.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`;
       
+      // Convert IANA timezone to Windows timezone for Microsoft Graph
+      const windowsTimezone = getWindowsTimezone(config.timezone);
+      
       const event: OutlookEvent = {
         subject: `${meetingType} with ${clientName}`,
         body: {
@@ -103,11 +106,11 @@ export async function POST(request: NextRequest) {
         },
         start: {
           dateTime: `${date}T${time}:00`,
-          timeZone: config.timezone,
+          timeZone: windowsTimezone,
         },
         end: {
           dateTime: `${date}T${endTime}:00`,
-          timeZone: config.timezone,
+          timeZone: windowsTimezone,
         },
         attendees: [
           {

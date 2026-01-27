@@ -1,7 +1,7 @@
 // GET/PUT/DELETE /api/bookings/[id] - Single booking operations (multi-tenant)
 import { NextRequest, NextResponse } from 'next/server';
 import { getBookingById, updateBooking, deleteBooking, getConfig, getUserIdFromBooking } from '@/lib/storage';
-import { deleteCalendarEvent, updateCalendarEvent, isConnected } from '@/lib/microsoft-graph';
+import { deleteCalendarEvent, updateCalendarEvent, isConnected, getWindowsTimezone } from '@/lib/microsoft-graph';
 import { sendCancellationEmail } from '@/lib/email';
 import { getAuthenticatedUser } from '@/lib/auth';
 
@@ -93,12 +93,13 @@ export async function PUT(
     // Update calendar event if Outlook is connected
     if (booking.outlookEventId && await isConnected(authUser.userId)) {
       const config = await getConfig(authUser.userId);
+      const windowsTimezone = getWindowsTimezone(config.timezone);
       
       if (updates.date || updates.time) {
         await updateCalendarEvent(authUser.userId, booking.outlookEventId, {
           start: {
             dateTime: `${updates.date || booking.date}T${updates.time || booking.time}:00`,
-            timeZone: config.timezone,
+            timeZone: windowsTimezone,
           },
         });
       }

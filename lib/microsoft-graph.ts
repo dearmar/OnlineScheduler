@@ -4,6 +4,43 @@ import { Client } from '@microsoft/microsoft-graph-client';
 import { MicrosoftTokens, OutlookEvent } from './types';
 import { sql } from './db/client';
 
+// Map IANA timezone to Windows timezone for Microsoft Graph API
+const ianaToWindowsTimezone: Record<string, string> = {
+  'America/New_York': 'Eastern Standard Time',
+  'America/Chicago': 'Central Standard Time',
+  'America/Denver': 'Mountain Standard Time',
+  'America/Los_Angeles': 'Pacific Standard Time',
+  'America/Anchorage': 'Alaskan Standard Time',
+  'Pacific/Honolulu': 'Hawaiian Standard Time',
+  'America/Phoenix': 'US Mountain Standard Time',
+  'America/Indiana/Indianapolis': 'US Eastern Standard Time',
+  'America/Detroit': 'Eastern Standard Time',
+  'America/Toronto': 'Eastern Standard Time',
+  'America/Vancouver': 'Pacific Standard Time',
+  'Europe/London': 'GMT Standard Time',
+  'Europe/Paris': 'Romance Standard Time',
+  'Europe/Berlin': 'W. Europe Standard Time',
+  'Europe/Amsterdam': 'W. Europe Standard Time',
+  'Europe/Rome': 'W. Europe Standard Time',
+  'Europe/Madrid': 'Romance Standard Time',
+  'Europe/Moscow': 'Russian Standard Time',
+  'Asia/Tokyo': 'Tokyo Standard Time',
+  'Asia/Shanghai': 'China Standard Time',
+  'Asia/Hong_Kong': 'China Standard Time',
+  'Asia/Singapore': 'Singapore Standard Time',
+  'Asia/Dubai': 'Arabian Standard Time',
+  'Asia/Kolkata': 'India Standard Time',
+  'Australia/Sydney': 'AUS Eastern Standard Time',
+  'Australia/Melbourne': 'AUS Eastern Standard Time',
+  'Australia/Perth': 'W. Australia Standard Time',
+  'Pacific/Auckland': 'New Zealand Standard Time',
+  'UTC': 'UTC',
+};
+
+export function getWindowsTimezone(ianaTimezone: string): string {
+  return ianaToWindowsTimezone[ianaTimezone] || ianaTimezone;
+}
+
 // MSAL configuration
 const msalConfig = {
   auth: {
@@ -283,6 +320,7 @@ export async function getFreeBusySchedule(
 
   try {
     const client = createGraphClient(accessToken);
+    const windowsTimezone = getWindowsTimezone(timezone);
     
     // Get calendar view for the date range
     const events = await client
@@ -292,7 +330,7 @@ export async function getFreeBusySchedule(
         endDateTime: `${endDate}T23:59:59`,
         $select: 'start,end,showAs',
       })
-      .header('Prefer', `outlook.timezone="${timezone}"`)
+      .header('Prefer', `outlook.timezone="${windowsTimezone}"`)
       .get();
 
     // Filter to only busy times
