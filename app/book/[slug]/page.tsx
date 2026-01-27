@@ -106,13 +106,18 @@ export default function BookingPage() {
         .then(res => res.json())
         .then(data => {
           if (data.success) {
-            setAvailableSlots(data.data.slots);
+            setAvailableSlots(data.data || []);
+          } else {
+            setAvailableSlots([]);
           }
         })
-        .catch(console.error)
+        .catch(err => {
+          console.error('Availability error:', err);
+          setAvailableSlots([]);
+        })
         .finally(() => setLoadingSlots(false));
     }
-  }, [selectedDate, selectedMeeting]);
+  }, [selectedDate, selectedMeeting, slug]);
 
   const handleBooking = async () => {
     if (!bookingDetails.name || !bookingDetails.email || !selectedDate || !selectedTime || !selectedMeeting) return;
