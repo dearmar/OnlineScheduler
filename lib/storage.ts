@@ -109,17 +109,31 @@ export async function updateConfig(updates: Partial<SchedulerConfig>): Promise<S
       // Upsert each meeting type
       for (let i = 0; i < updates.meetingTypes.length; i++) {
         const mt = updates.meetingTypes[i];
-        await sql`
-          INSERT INTO meeting_types (id, name, duration, description, color, sort_order, is_active)
-          VALUES (${mt.id}::uuid, ${mt.name}, ${mt.duration}, ${mt.description}, ${mt.color}, ${i}, true)
-          ON CONFLICT (id) DO UPDATE SET
-            name = EXCLUDED.name,
-            duration = EXCLUDED.duration,
-            description = EXCLUDED.description,
-            color = EXCLUDED.color,
-            sort_order = EXCLUDED.sort_order,
-            is_active = true
-        `;
+        
+        // Check if ID is a valid UUID format, if not generate a new one
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const isValidUuid = uuidRegex.test(mt.id);
+        
+        if (isValidUuid) {
+          // Update existing or insert with provided UUID
+          await sql`
+            INSERT INTO meeting_types (id, name, duration, description, color, sort_order, is_active)
+            VALUES (${mt.id}::uuid, ${mt.name}, ${mt.duration}, ${mt.description || ''}, ${mt.color}, ${i}, true)
+            ON CONFLICT (id) DO UPDATE SET
+              name = EXCLUDED.name,
+              duration = EXCLUDED.duration,
+              description = EXCLUDED.description,
+              color = EXCLUDED.color,
+              sort_order = EXCLUDED.sort_order,
+              is_active = true
+          `;
+        } else {
+          // Insert new with generated UUID
+          await sql`
+            INSERT INTO meeting_types (name, duration, description, color, sort_order, is_active)
+            VALUES (${mt.name}, ${mt.duration}, ${mt.description || ''}, ${mt.color}, ${i}, true)
+          `;
+        }
       }
     }
 

@@ -139,8 +139,9 @@ function AdminPageContent() {
       } else {
         setLoginError(data.error || 'Login failed');
       }
-    } catch (error) {
-      setLoginError('An error occurred');
+    } catch (error: any) {
+      console.error('Login error:', error);
+      setLoginError(error.message || 'An error occurred');
     }
   };
 
@@ -170,8 +171,9 @@ function AdminPageContent() {
       } else {
         showToast(data.error || 'Failed to save', 'error');
       }
-    } catch (error) {
-      showToast('An error occurred', 'error');
+    } catch (error: any) {
+      console.error('Save error:', error);
+      showToast(error.message || 'An error occurred', 'error');
     } finally {
       setIsSaving(false);
     }
@@ -730,10 +732,11 @@ function OutlookTab({ config, showToast, accentColor, primaryColor }: {
         showToast('Outlook disconnected', 'success');
         window.location.reload();
       } else {
-        showToast('Failed to disconnect', 'error');
+        showToast(data.error || 'Failed to disconnect', 'error');
       }
-    } catch (error) {
-      showToast('An error occurred', 'error');
+    } catch (error: any) {
+      console.error('Disconnect error:', error);
+      showToast(error.message || 'An error occurred', 'error');
     }
   };
 

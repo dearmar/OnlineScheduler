@@ -77,10 +77,10 @@ export async function PUT(request: NextRequest) {
       success: true,
       data: newConfig,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Update config error:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to update configuration' },
+      { success: false, error: error.message || 'Failed to update configuration' },
       { status: 500 }
     );
   }
