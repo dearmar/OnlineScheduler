@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getBookingById, updateBooking, deleteBooking, getConfig } from '@/lib/storage';
 import { deleteCalendarEvent, updateCalendarEvent, isConnected } from '@/lib/microsoft-graph';
 import { sendCancellationEmail } from '@/lib/email';
+
+// Force dynamic for database operations
+export const dynamic = 'force-dynamic';
 import { sendBookingCancelledWebhook, sendBookingUpdatedWebhook } from '@/lib/webhooks';
 
 // GET - Get single booking

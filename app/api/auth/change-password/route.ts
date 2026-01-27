@@ -1,4 +1,7 @@
 // POST /api/auth/change-password - Change admin password
+
+// Force dynamic
+export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { changePassword, isAuthenticated } from '@/lib/auth';
 

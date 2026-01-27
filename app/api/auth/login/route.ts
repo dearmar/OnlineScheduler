@@ -1,4 +1,7 @@
 // POST /api/auth/login - Admin login
+
+// Force dynamic
+export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateAdmin, ensureAdminUser } from '@/lib/auth';
 

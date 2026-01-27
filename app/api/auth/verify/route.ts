@@ -1,4 +1,7 @@
 // GET /api/auth/verify - Verify authentication token
+
+// Force dynamic
+export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyToken } from '@/lib/auth';
 

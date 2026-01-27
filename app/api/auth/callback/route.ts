@@ -1,4 +1,7 @@
 // GET /api/auth/callback - Microsoft OAuth callback
+
+// Force dynamic
+export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { exchangeCodeForTokens, getUserProfile } from '@/lib/microsoft-graph';
 import { updateConfig } from '@/lib/storage';

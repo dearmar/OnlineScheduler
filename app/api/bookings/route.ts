@@ -6,6 +6,9 @@ import { sendBookingEmails } from '@/lib/email';
 import { sendBookingCreatedWebhook } from '@/lib/webhooks';
 import { OutlookEvent } from '@/lib/types';
 
+// Force dynamic to allow POST requests
+export const dynamic = 'force-dynamic';
+
 // GET - Retrieve all bookings
 export async function GET(request: NextRequest) {
   try {

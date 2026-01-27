@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getConfig, updateConfig } from '@/lib/storage';
 import { isConnected } from '@/lib/microsoft-graph';
 
+// Force dynamic to allow PUT requests
+export const dynamic = 'force-dynamic';
+
 // GET - Retrieve configuration (public, but sensitive data filtered)
 export async function GET(request: NextRequest) {
   try {

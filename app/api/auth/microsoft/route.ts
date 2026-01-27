@@ -1,4 +1,7 @@
 // GET /api/auth/microsoft - Initiate Microsoft OAuth
+
+// Force dynamic
+export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthorizationUrl } from '@/lib/microsoft-graph';
 import { isAuthenticated } from '@/lib/auth';

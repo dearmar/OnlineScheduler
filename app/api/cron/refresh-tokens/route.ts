@@ -1,4 +1,7 @@
 // GET /api/cron/refresh-tokens - Cron job to refresh Microsoft tokens
+
+// Force dynamic
+export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { refreshAccessToken, getStoredTokens } from '@/lib/microsoft-graph';
 

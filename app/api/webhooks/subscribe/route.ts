@@ -1,4 +1,7 @@
 // POST /api/webhooks/subscribe - Subscribe to webhook notifications
+
+// Force dynamic
+export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { sql } from '@/lib/db/client';
 import { isAuthenticated } from '@/lib/auth';

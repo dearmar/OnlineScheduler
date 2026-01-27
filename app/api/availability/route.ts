@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getConfig, getAvailableSlots } from '@/lib/storage';
 import { getFreeBusySchedule, isConnected } from '@/lib/microsoft-graph';
 
+// Force dynamic for database queries
+export const dynamic = 'force-dynamic';
+
 // Format time for display
 function formatTime(hour: number, minute: number): string {
   const period = hour >= 12 ? 'PM' : 'AM';

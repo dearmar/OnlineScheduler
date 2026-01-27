@@ -1,4 +1,7 @@
 // POST /api/auth/microsoft/disconnect - Disconnect Microsoft account
+
+// Force dynamic
+export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { clearTokens } from '@/lib/microsoft-graph';
 import { updateConfig } from '@/lib/storage';
