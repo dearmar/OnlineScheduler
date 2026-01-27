@@ -10,6 +10,22 @@ function formatTime(hour: number, minute: number): string {
   return `${displayHour}:${minute.toString().padStart(2, '0')} ${period}`;
 }
 
+// Convert UTC datetime string to local time string in specified timezone
+function utcToLocalTime(utcDateTimeStr: string, timezone: string): string {
+  // Parse as UTC by appending Z
+  const utcDate = new Date(utcDateTimeStr + 'Z');
+  
+  // Convert to the target timezone
+  const localTime = utcDate.toLocaleTimeString('en-US', {
+    timeZone: timezone,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  
+  return localTime;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -79,10 +95,16 @@ export async function GET(request: NextRequest) {
         if (schedule?.scheduleItems) {
           const busyTimes = schedule.scheduleItems
             .filter((item: any) => item.status === 'busy' || item.status === 'tentative')
-            .map((item: any) => ({
-              start: new Date(item.start.dateTime).toTimeString().slice(0, 5),
-              end: new Date(item.end.dateTime).toTimeString().slice(0, 5),
-            }));
+            .map((item: any) => {
+              // The calendar returns times in UTC, convert to local timezone
+              const startLocal = utcToLocalTime(item.start.dateTime, config.timezone);
+              const endLocal = utcToLocalTime(item.end.dateTime, config.timezone);
+              
+              return {
+                start: startLocal,
+                end: endLocal,
+              };
+            });
           
           availableSlots = availableSlots.filter(slot => {
             const slotMinutes = timeToMinutes(slot);
