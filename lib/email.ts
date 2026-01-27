@@ -22,9 +22,11 @@ function formatTime(time: string): string {
   return `${displayHour}:${minutes.toString().padStart(2, '0')} ${period}`;
 }
 
-// Format date for display
+// Format date for display (parse as local date, not UTC)
 function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
+  // Parse YYYY-MM-DD format manually to avoid timezone issues
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const date = new Date(year, month - 1, day); // month is 0-indexed
   return date.toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',

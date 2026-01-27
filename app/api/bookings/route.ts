@@ -85,13 +85,14 @@ export async function POST(request: NextRequest) {
     // Create calendar event if Outlook is connected
     if (await isConnected() && process.env.ENABLE_CALENDAR_SYNC === 'true') {
       try {
+        // Calculate end time
         const [hours, minutes] = time.split(':').map(Number);
-        const startDateTime = new Date(date);
-        startDateTime.setHours(hours, minutes, 0, 0);
+        const endMinutes = hours * 60 + minutes + duration;
+        const endHours = Math.floor(endMinutes / 60);
+        const endMins = endMinutes % 60;
+        const endTime = `${endHours.toString().padStart(2, '0')}:${endMins.toString().padStart(2, '0')}`;
         
-        const endDateTime = new Date(startDateTime);
-        endDateTime.setMinutes(endDateTime.getMinutes() + duration);
-        
+        // Use local time format (NOT ISO/UTC) since we're specifying timezone separately
         const calendarEvent: OutlookEvent = {
           subject: `${meetingType}: ${clientName}`,
           body: {
@@ -108,11 +109,11 @@ export async function POST(request: NextRequest) {
             `,
           },
           start: {
-            dateTime: startDateTime.toISOString(),
+            dateTime: `${date}T${time}:00`,
             timeZone: config.timezone,
           },
           end: {
-            dateTime: endDateTime.toISOString(),
+            dateTime: `${date}T${endTime}:00`,
             timeZone: config.timezone,
           },
           attendees: [
