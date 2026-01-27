@@ -1,35 +1,45 @@
 import { NextResponse } from 'next/server';
-import { sql } from '@/lib/db/client';
-import bcrypt from 'bcryptjs';
+import { isConnected, getFreeBusySchedule, getStoredTokens } from '@/lib/microsoft-graph';
+import { getConfig } from '@/lib/storage';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const password = searchParams.get('password') || 'test123';
+  const date = searchParams.get('date') || new Date().toISOString().split('T')[0];
   
   try {
-    // Get the stored hash
-    const result = await sql`SELECT email, password_hash FROM admin_users LIMIT 1`;
+    const config = await getConfig();
+    const tokens = await getStoredTokens();
+    const connected = await isConnected();
     
-    if (result.length === 0) {
-      return NextResponse.json({ error: 'No admin user found' });
+    let calendarData = null;
+    let calendarError = null;
+    
+    if (connected) {
+      try {
+        const startDateTime = `${date}T${config.startHour.toString().padStart(2, '0')}:00:00`;
+        const endDateTime = `${date}T${config.endHour.toString().padStart(2, '0')}:00:00`;
+        
+        calendarData = await getFreeBusySchedule(
+          startDateTime,
+          endDateTime,
+          config.timezone
+        );
+      } catch (e: any) {
+        calendarError = e.message;
+      }
     }
     
-    const storedHash = result[0].password_hash;
-    
-    // Test the password
-    const isValid = await bcrypt.compare(password, storedHash);
-    
-    // Generate a new hash for comparison
-    const newHash = await bcrypt.hash(password, 12);
-    
     return NextResponse.json({
-      email: result[0].email,
-      storedHash: storedHash,
-      passwordTested: password,
-      isValid,
-      newHashForThisPassword: newHash,
-      hashLength: storedHash?.length,
-      hashType: typeof storedHash
+      outlookConnected: connected,
+      hasTokens: !!tokens,
+      tokenExpiresAt: tokens?.expiresAt ? new Date(tokens.expiresAt).toISOString() : null,
+      calendarSyncEnabled: process.env.ENABLE_CALENDAR_SYNC,
+      timezone: config.timezone,
+      startHour: config.startHour,
+      endHour: config.endHour,
+      dateChecked: date,
+      calendarData,
+      calendarError
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message });
