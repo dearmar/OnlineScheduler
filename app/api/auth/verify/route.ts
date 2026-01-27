@@ -1,9 +1,11 @@
 // GET /api/auth/verify - Verify authentication token
+import { NextRequest } from 'next/server';
+import { verifyToken } from '@/lib/auth';
+import { noCacheResponse } from '@/lib/api-helpers';
 
 // Force dynamic
 export const dynamic = 'force-dynamic';
-import { NextRequest, NextResponse } from 'next/server';
-import { verifyToken } from '@/lib/auth';
+export const revalidate = 0;
 
 export async function GET(request: NextRequest) {
   try {
@@ -13,22 +15,16 @@ export async function GET(request: NextRequest) {
     const token = cookieToken || headerToken;
     
     if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'No token provided' },
-        { status: 401 }
-      );
+      return noCacheResponse({ success: false, error: 'No token provided' }, 401);
     }
     
     const payload = verifyToken(token);
     
     if (!payload) {
-      return NextResponse.json(
-        { success: false, error: 'Invalid or expired token' },
-        { status: 401 }
-      );
+      return noCacheResponse({ success: false, error: 'Invalid or expired token' }, 401);
     }
     
-    return NextResponse.json({
+    return noCacheResponse({
       success: true,
       data: {
         userId: payload.userId,
@@ -37,9 +33,6 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error('Token verification error:', error);
-    return NextResponse.json(
-      { success: false, error: 'Verification failed' },
-      { status: 500 }
-    );
+    return noCacheResponse({ success: false, error: 'Verification failed' }, 500);
   }
 }

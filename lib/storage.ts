@@ -2,6 +2,7 @@
 import { sql } from './db/client';
 import { SchedulerConfig, MeetingType, BookedSlot } from './types';
 import { v4 as uuidv4 } from 'uuid';
+import { unstable_noStore as noStore } from 'next/cache';
 
 // Default configuration for new users
 const defaultConfig: Omit<SchedulerConfig, 'meetingTypes' | 'bookedSlots'> = {
@@ -25,6 +26,8 @@ const defaultMeetingTypes: Omit<MeetingType, 'id'>[] = [
 
 // Get user by slug or ID
 export async function getUserBySlugOrId(slugOrId: string): Promise<{ id: string; name: string; slug: string } | null> {
+  noStore();
+  
   const result = await sql`
     SELECT id, name, slug FROM admin_users 
     WHERE slug = ${slugOrId} OR id::text = ${slugOrId}
@@ -59,6 +62,8 @@ export async function ensureUserConfig(userId: string): Promise<void> {
 
 // Get configuration for a specific user
 export async function getConfig(userId: string): Promise<SchedulerConfig> {
+  noStore();
+  
   // Ensure config exists
   await ensureUserConfig(userId);
   
@@ -202,6 +207,8 @@ export async function updateConfig(userId: string, updates: Partial<SchedulerCon
 
 // Get all bookings for a user
 export async function getBookings(userId: string): Promise<BookedSlot[]> {
+  noStore();
+  
   const bookings = await sql`
     SELECT id, date, time, duration, meeting_type_name, client_name, client_email, notes, outlook_event_id, status, created_at
     FROM bookings

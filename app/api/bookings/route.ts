@@ -6,8 +6,10 @@ import { sendBookingEmails } from '@/lib/email';
 import { sendBookingCreatedWebhook } from '@/lib/webhooks';
 import { OutlookEvent } from '@/lib/types';
 import { getAuthenticatedUser } from '@/lib/auth';
+import { noCacheResponse } from '@/lib/api-helpers';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 // GET - Retrieve all bookings (admin only)
 export async function GET(request: NextRequest) {
@@ -15,24 +17,15 @@ export async function GET(request: NextRequest) {
     const authUser = await getAuthenticatedUser(request);
     
     if (!authUser) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return noCacheResponse({ success: false, error: 'Unauthorized' }, 401);
     }
     
     const bookings = await getBookings(authUser.userId);
     
-    return NextResponse.json({
-      success: true,
-      data: bookings,
-    });
+    return noCacheResponse({ success: true, data: bookings });
   } catch (error) {
     console.error('Get bookings error:', error);
-    return NextResponse.json(
-      { success: false, error: 'Failed to retrieve bookings' },
-      { status: 500 }
-    );
+    return noCacheResponse({ success: false, error: 'Failed to retrieve bookings' }, 500);
   }
 }
 

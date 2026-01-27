@@ -3,8 +3,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAllAdminUsers, createAdminUser, getAuthenticatedUser } from '@/lib/auth';
 import { sendNewUserEmail } from '@/lib/email';
 import { getConfig } from '@/lib/storage';
+import { noCacheResponse } from '@/lib/api-helpers';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 // GET - List all admin users
 export async function GET(request: NextRequest) {
@@ -12,15 +14,12 @@ export async function GET(request: NextRequest) {
     const authUser = await getAuthenticatedUser(request);
     
     if (!authUser) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return noCacheResponse({ success: false, error: 'Unauthorized' }, 401);
     }
     
     const users = await getAllAdminUsers();
     
-    return NextResponse.json({
+    return noCacheResponse({
       success: true,
       data: users.map(u => ({
         id: u.id,
@@ -34,10 +33,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error: any) {
     console.error('Get users error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Failed to get users' },
-      { status: 500 }
-    );
+    return noCacheResponse({ success: false, error: error.message || 'Failed to get users' }, 500);
   }
 }
 
@@ -47,28 +43,19 @@ export async function POST(request: NextRequest) {
     const authUser = await getAuthenticatedUser(request);
     
     if (!authUser) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return noCacheResponse({ success: false, error: 'Unauthorized' }, 401);
     }
     
     const { email, name } = await request.json();
     
     if (!email || !name) {
-      return NextResponse.json(
-        { success: false, error: 'Email and name are required' },
-        { status: 400 }
-      );
+      return noCacheResponse({ success: false, error: 'Email and name are required' }, 400);
     }
     
     // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-      return NextResponse.json(
-        { success: false, error: 'Invalid email format' },
-        { status: 400 }
-      );
+      return noCacheResponse({ success: false, error: 'Invalid email format' }, 400);
     }
     
     // Create user with temp password
@@ -83,7 +70,7 @@ export async function POST(request: NextRequest) {
       // Continue - user is created, they can use forgot password if needed
     }
     
-    return NextResponse.json({
+    return noCacheResponse({
       success: true,
       data: {
         id: user.id,
@@ -96,9 +83,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error('Create user error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Failed to create user' },
-      { status: 500 }
-    );
+    return noCacheResponse({ success: false, error: error.message || 'Failed to create user' }, 500);
   }
 }

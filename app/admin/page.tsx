@@ -135,7 +135,10 @@ function AdminPageContent() {
   useEffect(() => {
     if (resetToken) return; // Skip auth check if handling reset token
     
-    fetch('/api/auth/verify')
+    fetch(`/api/auth/verify?_t=${Date.now()}`, { 
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' },
+    })
       .then(res => res.json())
       .then(data => {
         if (data.success) {
@@ -150,7 +153,14 @@ function AdminPageContent() {
 
   const loadConfig = async () => {
     try {
-      const response = await fetch('/api/config', { cache: 'no-store' });
+      // Add timestamp to bust cache
+      const response = await fetch(`/api/config?_t=${Date.now()}`, { 
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+        },
+      });
       const data = await response.json();
       if (data.success) {
         setConfig(data.data);
@@ -162,7 +172,13 @@ function AdminPageContent() {
   
   const loadCurrentUser = async () => {
     try {
-      const response = await fetch('/api/auth/me', { cache: 'no-store' });
+      const response = await fetch(`/api/auth/me?_t=${Date.now()}`, { 
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+        },
+      });
       const data = await response.json();
       if (data.success) {
         setCurrentUser(data.data);

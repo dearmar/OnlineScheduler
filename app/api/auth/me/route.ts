@@ -1,30 +1,26 @@
 // GET /api/auth/me - Get current user info
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { getAuthenticatedUser, getAdminUserById } from '@/lib/auth';
+import { noCacheResponse } from '@/lib/api-helpers';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export async function GET(request: NextRequest) {
   try {
     const authUser = await getAuthenticatedUser(request);
     
     if (!authUser) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return noCacheResponse({ success: false, error: 'Unauthorized' }, 401);
     }
     
     const user = await getAdminUserById(authUser.userId);
     
     if (!user) {
-      return NextResponse.json(
-        { success: false, error: 'User not found' },
-        { status: 404 }
-      );
+      return noCacheResponse({ success: false, error: 'User not found' }, 404);
     }
     
-    return NextResponse.json({
+    return noCacheResponse({
       success: true,
       data: {
         id: user.id,
@@ -35,9 +31,6 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error('Get user error:', error);
-    return NextResponse.json(
-      { success: false, error: 'Failed to get user info' },
-      { status: 500 }
-    );
+    return noCacheResponse({ success: false, error: 'Failed to get user info' }, 500);
   }
 }
