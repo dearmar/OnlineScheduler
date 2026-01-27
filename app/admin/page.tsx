@@ -3,7 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { SchedulerConfig, MeetingType } from '@/lib/types';
+import { SchedulerConfig, MeetingType, WeeklyAvailability, DayAvailability, LocationType, CalendarProvider } from '@/lib/types';
 
 // Admin User interface
 interface AdminUserDisplay {
@@ -651,9 +651,9 @@ function AdminPageContent() {
 
   const tabs = [
     { id: 'branding', label: 'Branding', icon: '✦' },
-    { id: 'calendar', label: 'Calendar', icon: '📅' },
+    { id: 'availability', label: 'Availability', icon: '🕐' },
     { id: 'meetings', label: 'Meeting Types', icon: '⏱' },
-    { id: 'outlook', label: 'Outlook', icon: '📧' },
+    { id: 'calendar', label: 'Calendar Sync', icon: '📧' },
     { id: 'users', label: 'Users', icon: '👥' },
   ];
 
@@ -723,9 +723,9 @@ function AdminPageContent() {
             <BrandingTab config={config} onSave={saveConfig} isSaving={isSaving} accentColor={accentColor} primaryColor={primaryColor} userSlug={currentUser?.slug} />
           )}
 
-          {/* Calendar Tab */}
-          {activeTab === 'calendar' && config && (
-            <CalendarTab config={config} onSave={saveConfig} isSaving={isSaving} accentColor={accentColor} primaryColor={primaryColor} />
+          {/* Availability Tab */}
+          {activeTab === 'availability' && config && (
+            <AvailabilityTab config={config} onSave={saveConfig} isSaving={isSaving} accentColor={accentColor} primaryColor={primaryColor} />
           )}
 
           {/* Meetings Tab */}
@@ -733,9 +733,9 @@ function AdminPageContent() {
             <MeetingsTab config={config} onSave={saveConfig} isSaving={isSaving} accentColor={accentColor} primaryColor={primaryColor} />
           )}
 
-          {/* Outlook Tab */}
-          {activeTab === 'outlook' && config && (
-            <OutlookTab config={config} showToast={showToast} accentColor={accentColor} primaryColor={primaryColor} />
+          {/* Calendar Sync Tab */}
+          {activeTab === 'calendar' && config && (
+            <CalendarSyncTab config={config} showToast={showToast} onSave={saveConfig} accentColor={accentColor} primaryColor={primaryColor} />
           )}
 
           {/* Users Tab */}
@@ -929,77 +929,184 @@ function BrandingTab({ config, onSave, isSaving, accentColor, primaryColor, user
 }
 
 // Calendar Tab Component
-function CalendarTab({ config, onSave, isSaving, accentColor, primaryColor }: {
+// Default weekly availability
+const defaultWeeklyAvailability: WeeklyAvailability = {
+  sunday: { enabled: false, startHour: 9, endHour: 17 },
+  monday: { enabled: true, startHour: 9, endHour: 17 },
+  tuesday: { enabled: true, startHour: 9, endHour: 17 },
+  wednesday: { enabled: true, startHour: 9, endHour: 17 },
+  thursday: { enabled: true, startHour: 9, endHour: 17 },
+  friday: { enabled: true, startHour: 9, endHour: 17 },
+  saturday: { enabled: false, startHour: 9, endHour: 17 },
+};
+
+function AvailabilityTab({ config, onSave, isSaving, accentColor, primaryColor }: {
   config: Partial<SchedulerConfig>;
   onSave: (updates: Partial<SchedulerConfig>) => Promise<void>;
   isSaving: boolean;
   accentColor: string;
   primaryColor: string;
 }) {
-  const [local, setLocal] = useState({
-    startHour: config.startHour || 9,
-    endHour: config.endHour || 17,
-    timezone: config.timezone || 'America/New_York',
-  });
+  const [weeklyAvailability, setWeeklyAvailability] = useState<WeeklyAvailability>(
+    config.weeklyAvailability || defaultWeeklyAvailability
+  );
+  const [timezone, setTimezone] = useState(config.timezone || 'America/New_York');
 
   const hours = Array.from({ length: 24 }, (_, i) => i);
+  const dayNames: Array<keyof WeeklyAvailability> = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const dayLabels: Record<keyof WeeklyAvailability, string> = {
+    sunday: 'Sunday',
+    monday: 'Monday',
+    tuesday: 'Tuesday',
+    wednesday: 'Wednesday',
+    thursday: 'Thursday',
+    friday: 'Friday',
+    saturday: 'Saturday',
+  };
+
+  const updateDay = (day: keyof WeeklyAvailability, field: keyof DayAvailability, value: boolean | number) => {
+    setWeeklyAvailability(prev => ({
+      ...prev,
+      [day]: {
+        ...prev[day],
+        [field]: value,
+      },
+    }));
+  };
+
+  const applyToAllDays = (day: keyof WeeklyAvailability) => {
+    const sourceDay = weeklyAvailability[day];
+    setWeeklyAvailability(prev => {
+      const updated = { ...prev };
+      dayNames.forEach(d => {
+        if (d !== day) {
+          updated[d] = { ...sourceDay };
+        }
+      });
+      return updated;
+    });
+  };
+
+  const handleSave = () => {
+    // Also update legacy startHour/endHour for backwards compatibility
+    // Use Monday's hours as the default
+    onSave({
+      weeklyAvailability,
+      timezone,
+      startHour: weeklyAvailability.monday.startHour,
+      endHour: weeklyAvailability.monday.endHour,
+    });
+  };
 
   return (
     <div className="space-y-8">
-      <div>
-        <label className="block text-slate-400 text-sm font-medium mb-3">Available Hours</label>
-        <div className="flex items-center gap-4">
-          <div>
-            <span className="block text-slate-500 text-xs mb-1.5">Start Time</span>
-            <select
-              value={local.startHour}
-              onChange={(e) => setLocal({ ...local, startHour: parseInt(e.target.value) })}
-              className="px-4 py-3.5 rounded-xl border border-white/15 bg-white/5 text-white cursor-pointer min-w-[140px]"
-            >
-              {hours.map(h => (
-                <option key={h} value={h} className="bg-slate-800">
-                  {formatTime(h, 0)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <span className="text-slate-500 pt-6">to</span>
-          <div>
-            <span className="block text-slate-500 text-xs mb-1.5">End Time</span>
-            <select
-              value={local.endHour}
-              onChange={(e) => setLocal({ ...local, endHour: parseInt(e.target.value) })}
-              className="px-4 py-3.5 rounded-xl border border-white/15 bg-white/5 text-white cursor-pointer min-w-[140px]"
-            >
-              {hours.map(h => (
-                <option key={h} value={h} className="bg-slate-800">
-                  {formatTime(h, 0)}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </div>
-
+      {/* Timezone */}
       <div>
         <label className="block text-slate-400 text-sm font-medium mb-3">Timezone</label>
         <select
-          value={local.timezone}
-          onChange={(e) => setLocal({ ...local, timezone: e.target.value })}
+          value={timezone}
+          onChange={(e) => setTimezone(e.target.value)}
           className="px-4 py-3.5 rounded-xl border border-white/15 bg-white/5 text-white cursor-pointer min-w-[300px]"
         >
           <option value="America/New_York" className="bg-slate-800">Eastern Time (ET)</option>
           <option value="America/Chicago" className="bg-slate-800">Central Time (CT)</option>
           <option value="America/Denver" className="bg-slate-800">Mountain Time (MT)</option>
           <option value="America/Los_Angeles" className="bg-slate-800">Pacific Time (PT)</option>
+          <option value="America/Anchorage" className="bg-slate-800">Alaska Time (AKT)</option>
+          <option value="Pacific/Honolulu" className="bg-slate-800">Hawaii Time (HST)</option>
           <option value="Europe/London" className="bg-slate-800">London (GMT/BST)</option>
           <option value="Europe/Paris" className="bg-slate-800">Paris (CET)</option>
+          <option value="Europe/Berlin" className="bg-slate-800">Berlin (CET)</option>
           <option value="Asia/Tokyo" className="bg-slate-800">Tokyo (JST)</option>
+          <option value="Asia/Shanghai" className="bg-slate-800">Shanghai (CST)</option>
+          <option value="Asia/Singapore" className="bg-slate-800">Singapore (SGT)</option>
+          <option value="Australia/Sydney" className="bg-slate-800">Sydney (AEST)</option>
         </select>
       </div>
 
+      {/* Weekly Availability */}
+      <div>
+        <label className="block text-slate-400 text-sm font-medium mb-4">Weekly Availability</label>
+        <div className="space-y-3">
+          {dayNames.map((day) => (
+            <div
+              key={day}
+              className={`p-4 rounded-xl border transition-all ${
+                weeklyAvailability[day].enabled
+                  ? 'bg-white/3 border-white/15'
+                  : 'bg-white/1 border-white/5'
+              }`}
+            >
+              <div className="flex items-center gap-4">
+                {/* Day toggle */}
+                <label className="flex items-center gap-3 cursor-pointer min-w-[140px]">
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      checked={weeklyAvailability[day].enabled}
+                      onChange={(e) => updateDay(day, 'enabled', e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-700 rounded-full peer peer-checked:bg-indigo-600 transition-colors"></div>
+                    <div className="absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-5"></div>
+                  </div>
+                  <span className={`font-medium ${weeklyAvailability[day].enabled ? 'text-white' : 'text-slate-500'}`}>
+                    {dayLabels[day]}
+                  </span>
+                </label>
+
+                {weeklyAvailability[day].enabled && (
+                  <>
+                    {/* Start Time */}
+                    <select
+                      value={weeklyAvailability[day].startHour}
+                      onChange={(e) => updateDay(day, 'startHour', parseInt(e.target.value))}
+                      className="px-3 py-2 rounded-lg border border-white/15 bg-white/5 text-white text-sm cursor-pointer"
+                    >
+                      {hours.map(h => (
+                        <option key={h} value={h} className="bg-slate-800">
+                          {formatTime(h, 0)}
+                        </option>
+                      ))}
+                    </select>
+
+                    <span className="text-slate-500 text-sm">to</span>
+
+                    {/* End Time */}
+                    <select
+                      value={weeklyAvailability[day].endHour}
+                      onChange={(e) => updateDay(day, 'endHour', parseInt(e.target.value))}
+                      className="px-3 py-2 rounded-lg border border-white/15 bg-white/5 text-white text-sm cursor-pointer"
+                    >
+                      {hours.map(h => (
+                        <option key={h} value={h} className="bg-slate-800">
+                          {formatTime(h, 0)}
+                        </option>
+                      ))}
+                    </select>
+
+                    {/* Apply to all button */}
+                    <button
+                      onClick={() => applyToAllDays(day)}
+                      className="ml-auto text-xs text-slate-500 hover:text-indigo-400 transition-colors"
+                      title="Apply these hours to all days"
+                    >
+                      Apply to all
+                    </button>
+                  </>
+                )}
+
+                {!weeklyAvailability[day].enabled && (
+                  <span className="text-slate-600 text-sm ml-auto">Unavailable</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <button
-        onClick={() => onSave(local)}
+        onClick={handleSave}
         disabled={isSaving}
         className="px-8 py-3.5 rounded-xl text-white font-semibold transition-all disabled:opacity-50"
         style={{ 
@@ -1007,7 +1114,7 @@ function CalendarTab({ config, onSave, isSaving, accentColor, primaryColor }: {
           boxShadow: `0 4px 20px ${accentColor}40`
         }}
       >
-        {isSaving ? 'Saving...' : 'Save Changes'}
+        {isSaving ? 'Saving...' : 'Save Availability'}
       </button>
     </div>
   );
@@ -1026,6 +1133,12 @@ function MeetingsTab({ config, onSave, isSaving, accentColor, primaryColor }: {
 
   const colors = ['#10b981', '#4f46e5', '#8b5cf6', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899'];
 
+  const locationTypeLabels: Record<LocationType, string> = {
+    'in_person': 'In Person',
+    'phone': 'Phone Call',
+    'virtual': 'Virtual Meeting',
+  };
+
   const addMeetingType = () => {
     const newType: MeetingType = {
       id: Date.now().toString(),
@@ -1033,6 +1146,8 @@ function MeetingsTab({ config, onSave, isSaving, accentColor, primaryColor }: {
       duration: 30,
       description: 'Meeting description',
       color: colors[meetingTypes.length % colors.length],
+      locationType: 'virtual',
+      location: '',
     };
     setMeetingTypes([...meetingTypes, newType]);
     setEditingId(newType.id);
@@ -1046,6 +1161,47 @@ function MeetingsTab({ config, onSave, isSaving, accentColor, primaryColor }: {
 
   const deleteMeetingType = (id: string) => {
     setMeetingTypes(meetingTypes.filter(mt => mt.id !== id));
+  };
+
+  const getLocationPlaceholder = (locationType: LocationType): string => {
+    switch (locationType) {
+      case 'in_person': return 'e.g., 123 Main St, Suite 100, City, State';
+      case 'virtual': return 'e.g., https://zoom.us/j/123456789';
+      case 'phone': return 'Client will provide their phone number when booking';
+    }
+  };
+
+  const getLocationLabel = (locationType: LocationType): string => {
+    switch (locationType) {
+      case 'in_person': return 'Meeting Location';
+      case 'virtual': return 'Meeting Link';
+      case 'phone': return 'Phone Info (optional)';
+    }
+  };
+
+  const isLocationRequired = (locationType: LocationType): boolean => {
+    return locationType === 'in_person' || locationType === 'virtual';
+  };
+
+  const validateMeetingTypes = (): string | null => {
+    for (const mt of meetingTypes) {
+      if (mt.locationType === 'in_person' && !mt.location?.trim()) {
+        return `"${mt.name}" requires a location for in-person meetings`;
+      }
+      if (mt.locationType === 'virtual' && !mt.location?.trim()) {
+        return `"${mt.name}" requires a meeting link for virtual meetings`;
+      }
+    }
+    return null;
+  };
+
+  const handleSave = async () => {
+    const error = validateMeetingTypes();
+    if (error) {
+      alert(error);
+      return;
+    }
+    await onSave({ meetingTypes });
   };
 
   return (
@@ -1100,6 +1256,66 @@ function MeetingsTab({ config, onSave, isSaving, accentColor, primaryColor }: {
                   className="w-full px-3 py-3 rounded-lg border border-white/15 bg-white/5 text-white text-sm"
                 />
               </div>
+              
+              {/* Location Type Section */}
+              <div className="pt-2 border-t border-white/10">
+                <label className="block text-slate-500 text-xs mb-2">Meeting Location Type</label>
+                <div className="flex gap-3">
+                  {(['in_person', 'phone', 'virtual'] as LocationType[]).map((type) => (
+                    <button
+                      key={type}
+                      onClick={() => {
+                        updateMeetingType(mt.id, 'locationType', type);
+                        if (type === 'phone') {
+                          updateMeetingType(mt.id, 'location', '');
+                        }
+                      }}
+                      className={`flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-all ${
+                        mt.locationType === type
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-white/5 text-slate-400 hover:bg-white/10 border border-white/10'
+                      }`}
+                    >
+                      {type === 'in_person' && '📍 '}
+                      {type === 'phone' && '📞 '}
+                      {type === 'virtual' && '💻 '}
+                      {locationTypeLabels[type]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Location/Link Input */}
+              {mt.locationType !== 'phone' && (
+                <div>
+                  <label className="block text-slate-500 text-xs mb-1.5">
+                    {getLocationLabel(mt.locationType)}
+                    {isLocationRequired(mt.locationType) && <span className="text-red-400 ml-1">*</span>}
+                  </label>
+                  <input
+                    type={mt.locationType === 'virtual' ? 'url' : 'text'}
+                    value={mt.location || ''}
+                    onChange={(e) => updateMeetingType(mt.id, 'location', e.target.value)}
+                    placeholder={getLocationPlaceholder(mt.locationType)}
+                    className="w-full px-3 py-3 rounded-lg border border-white/15 bg-white/5 text-white text-sm placeholder-slate-600"
+                  />
+                  {mt.locationType === 'in_person' && (
+                    <p className="text-slate-600 text-xs mt-1">This address will be shown to clients and added to calendar events.</p>
+                  )}
+                  {mt.locationType === 'virtual' && (
+                    <p className="text-slate-600 text-xs mt-1">This link will be shared with clients and added to calendar events.</p>
+                  )}
+                </div>
+              )}
+
+              {mt.locationType === 'phone' && (
+                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                  <p className="text-amber-300 text-sm">
+                    📞 Clients will be asked to provide their phone number when booking. You will call them at the scheduled time.
+                  </p>
+                </div>
+              )}
+
               <div className="flex gap-3">
                 <button
                   onClick={() => setEditingId(null)}
@@ -1124,6 +1340,18 @@ function MeetingsTab({ config, onSave, isSaving, accentColor, primaryColor }: {
               <div className="flex-1">
                 <h3 className="text-white font-semibold mb-1">{mt.name}</h3>
                 <p className="text-slate-500 text-sm">{mt.description}</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs text-slate-600">
+                    {mt.locationType === 'in_person' && '📍 In Person'}
+                    {mt.locationType === 'phone' && '📞 Phone Call'}
+                    {mt.locationType === 'virtual' && '💻 Virtual'}
+                  </span>
+                  {mt.location && mt.locationType !== 'phone' && (
+                    <span className="text-xs text-slate-600 truncate max-w-[200px]">
+                      • {mt.location}
+                    </span>
+                  )}
+                </div>
               </div>
               <div
                 className="px-4 py-2 rounded-full text-sm font-semibold"
@@ -1144,7 +1372,7 @@ function MeetingsTab({ config, onSave, isSaving, accentColor, primaryColor }: {
       </button>
 
       <button
-        onClick={() => onSave({ meetingTypes })}
+        onClick={handleSave}
         disabled={isSaving}
         className="px-8 py-3.5 rounded-xl text-white font-semibold transition-all disabled:opacity-50"
         style={{
@@ -1159,21 +1387,32 @@ function MeetingsTab({ config, onSave, isSaving, accentColor, primaryColor }: {
 }
 
 // Outlook Tab Component
-function OutlookTab({ config, showToast, accentColor, primaryColor }: {
+// Calendar Sync Tab Component (supports Outlook and Gmail)
+function CalendarSyncTab({ config, showToast, onSave, accentColor, primaryColor }: {
   config: Partial<SchedulerConfig>;
   showToast: (message: string, type: 'success' | 'error') => void;
+  onSave: (updates: Partial<SchedulerConfig>) => Promise<void>;
   accentColor: string;
   primaryColor: string;
 }) {
-  const [isConnecting, setIsConnecting] = useState(false);
-  const connected = config.outlookConnected;
+  const [isConnecting, setIsConnecting] = useState<'outlook' | 'google' | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<CalendarProvider>(config.calendarProvider || 'none');
+  
+  const outlookConnected = config.outlookConnected;
+  const googleConnected = config.googleConnected;
+  const hasAnyConnection = outlookConnected || googleConnected;
 
-  const handleConnect = () => {
-    setIsConnecting(true);
+  const handleConnectOutlook = () => {
+    setIsConnecting('outlook');
     window.location.href = '/api/auth/microsoft';
   };
 
-  const handleDisconnect = async () => {
+  const handleConnectGoogle = () => {
+    setIsConnecting('google');
+    window.location.href = '/api/auth/google';
+  };
+
+  const handleDisconnectOutlook = async () => {
     try {
       const response = await fetch('/api/auth/microsoft/disconnect', { method: 'POST' });
       const data = await response.json();
@@ -1184,68 +1423,186 @@ function OutlookTab({ config, showToast, accentColor, primaryColor }: {
         showToast(data.error || 'Failed to disconnect', 'error');
       }
     } catch (error: any) {
-      console.error('Disconnect error:', error);
       showToast(error.message || 'An error occurred', 'error');
     }
   };
 
+  const handleDisconnectGoogle = async () => {
+    try {
+      const response = await fetch('/api/auth/google/disconnect', { method: 'POST' });
+      const data = await response.json();
+      if (data.success) {
+        showToast('Google disconnected', 'success');
+        window.location.reload();
+      } else {
+        showToast(data.error || 'Failed to disconnect', 'error');
+      }
+    } catch (error: any) {
+      showToast(error.message || 'An error occurred', 'error');
+    }
+  };
+
+  const handleSetActiveProvider = async (provider: CalendarProvider) => {
+    setSelectedProvider(provider);
+    await onSave({ calendarProvider: provider });
+    showToast(`Calendar sync set to ${provider === 'outlook' ? 'Outlook' : provider === 'google' ? 'Google Calendar' : 'None'}`, 'success');
+  };
+
   return (
     <div className="space-y-8">
-      <div
-        className={`p-6 rounded-2xl flex items-center gap-4 ${
-          connected
-            ? 'bg-emerald-500/10 border border-emerald-500/30'
-            : 'bg-white/2 border border-white/10'
-        }`}
-      >
-        <div
-          className={`w-12 h-12 rounded-xl flex items-center justify-center text-white ${
-            connected ? 'bg-emerald-500' : 'bg-white/10'
-          }`}
-        >
-          {connected ? <CheckIcon /> : <MailIcon />}
-        </div>
-        <div className="flex-1">
-          <h3 className="text-white font-semibold mb-1">
-            {connected ? 'Outlook Connected' : 'Connect Outlook'}
-          </h3>
-          <p className="text-slate-500 text-sm">
-            {connected ? config.outlookEmail : 'Link your Outlook calendar to sync bookings'}
-          </p>
-        </div>
-        {connected && (
-          <button
-            onClick={handleDisconnect}
-            className="px-5 py-2.5 rounded-lg border border-white/20 text-slate-400 text-sm hover:text-white transition-colors"
-          >
-            Disconnect
-          </button>
-        )}
+      {/* Explanation */}
+      <div className="p-5 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
+        <p className="text-slate-300 text-sm leading-relaxed">
+          <strong className="text-white">Calendar Sync:</strong> Connect your calendar to automatically create events when clients book meetings and check your availability in real-time. You can connect multiple calendars but only one can be active at a time.
+        </p>
       </div>
 
-      {!connected && (
-        <>
-          <div className="p-5 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
-            <p className="text-slate-300 text-sm leading-relaxed">
-              <strong className="text-white">How it works:</strong> Connecting your Microsoft account allows the scheduler to automatically create calendar events when clients book meetings, check your availability in real-time, and send meeting invitations through Outlook.
+      {/* Microsoft Outlook */}
+      <div className="space-y-4">
+        <h3 className="text-white font-semibold flex items-center gap-2">
+          <span className="text-xl">📧</span> Microsoft Outlook
+        </h3>
+        <div
+          className={`p-6 rounded-2xl flex items-center gap-4 ${
+            outlookConnected
+              ? selectedProvider === 'outlook' 
+                ? 'bg-emerald-500/10 border border-emerald-500/30' 
+                : 'bg-white/2 border border-white/20'
+              : 'bg-white/2 border border-white/10'
+          }`}
+        >
+          <div
+            className={`w-12 h-12 rounded-xl flex items-center justify-center text-white ${
+              outlookConnected 
+                ? selectedProvider === 'outlook' ? 'bg-emerald-500' : 'bg-blue-500'
+                : 'bg-white/10'
+            }`}
+          >
+            {outlookConnected ? <CheckIcon /> : <MailIcon />}
+          </div>
+          <div className="flex-1">
+            <h4 className="text-white font-medium mb-1">
+              {outlookConnected ? 'Connected' : 'Not Connected'}
+              {outlookConnected && selectedProvider === 'outlook' && (
+                <span className="ml-2 text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full">Active</span>
+              )}
+            </h4>
+            <p className="text-slate-500 text-sm">
+              {outlookConnected ? config.outlookEmail : 'Connect your Microsoft/Outlook account'}
             </p>
           </div>
-
-          <button
-            onClick={handleConnect}
-            disabled={isConnecting}
-            className="px-8 py-3.5 rounded-xl text-white font-semibold transition-all flex items-center gap-3 disabled:opacity-50"
-            style={{
-              background: `linear-gradient(135deg, ${accentColor}, ${primaryColor})`,
-              boxShadow: `0 4px 20px ${accentColor}40`
-            }}
-          >
-            {isConnecting && (
-              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+          <div className="flex items-center gap-2">
+            {outlookConnected && selectedProvider !== 'outlook' && (
+              <button
+                onClick={() => handleSetActiveProvider('outlook')}
+                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
+              >
+                Set Active
+              </button>
             )}
-            {isConnecting ? 'Connecting...' : 'Connect with Microsoft'}
+            {outlookConnected ? (
+              <button
+                onClick={handleDisconnectOutlook}
+                className="px-4 py-2 rounded-lg border border-white/20 text-slate-400 text-sm hover:text-white transition-colors"
+              >
+                Disconnect
+              </button>
+            ) : (
+              <button
+                onClick={handleConnectOutlook}
+                disabled={isConnecting === 'outlook'}
+                className="px-5 py-2.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors flex items-center gap-2"
+              >
+                {isConnecting === 'outlook' && (
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                )}
+                Connect Outlook
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Google Calendar */}
+      <div className="space-y-4">
+        <h3 className="text-white font-semibold flex items-center gap-2">
+          <span className="text-xl">📅</span> Google Calendar
+        </h3>
+        <div
+          className={`p-6 rounded-2xl flex items-center gap-4 ${
+            googleConnected
+              ? selectedProvider === 'google' 
+                ? 'bg-emerald-500/10 border border-emerald-500/30' 
+                : 'bg-white/2 border border-white/20'
+              : 'bg-white/2 border border-white/10'
+          }`}
+        >
+          <div
+            className={`w-12 h-12 rounded-xl flex items-center justify-center text-white ${
+              googleConnected 
+                ? selectedProvider === 'google' ? 'bg-emerald-500' : 'bg-red-500'
+                : 'bg-white/10'
+            }`}
+          >
+            {googleConnected ? <CheckIcon /> : <CalendarIcon />}
+          </div>
+          <div className="flex-1">
+            <h4 className="text-white font-medium mb-1">
+              {googleConnected ? 'Connected' : 'Not Connected'}
+              {googleConnected && selectedProvider === 'google' && (
+                <span className="ml-2 text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full">Active</span>
+              )}
+            </h4>
+            <p className="text-slate-500 text-sm">
+              {googleConnected ? config.googleEmail : 'Connect your Google account'}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {googleConnected && selectedProvider !== 'google' && (
+              <button
+                onClick={() => handleSetActiveProvider('google')}
+                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
+              >
+                Set Active
+              </button>
+            )}
+            {googleConnected ? (
+              <button
+                onClick={handleDisconnectGoogle}
+                className="px-4 py-2 rounded-lg border border-white/20 text-slate-400 text-sm hover:text-white transition-colors"
+              >
+                Disconnect
+              </button>
+            ) : (
+              <button
+                onClick={handleConnectGoogle}
+                disabled={isConnecting === 'google'}
+                className="px-5 py-2.5 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors flex items-center gap-2"
+              >
+                {isConnecting === 'google' && (
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                )}
+                Connect Google
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* No Calendar Option */}
+      {hasAnyConnection && (
+        <div className="pt-4 border-t border-white/10">
+          <button
+            onClick={() => handleSetActiveProvider('none')}
+            className={`text-sm transition-colors ${
+              selectedProvider === 'none' 
+                ? 'text-indigo-400' 
+                : 'text-slate-500 hover:text-slate-400'
+            }`}
+          >
+            {selectedProvider === 'none' ? '✓ ' : ''}Disable calendar sync (keep connections but don't create events)
           </button>
-        </>
+        </div>
       )}
     </div>
   );

@@ -1,8 +1,19 @@
 // Database storage operations - Multi-tenant version
 import { sql } from './db/client';
-import { SchedulerConfig, MeetingType, BookedSlot } from './types';
+import { SchedulerConfig, MeetingType, BookedSlot, WeeklyAvailability, CalendarProvider } from './types';
 import { v4 as uuidv4 } from 'uuid';
 import { unstable_noStore as noStore } from 'next/cache';
+
+// Default weekly availability
+const defaultWeeklyAvailability: WeeklyAvailability = {
+  sunday: { enabled: false, startHour: 9, endHour: 17 },
+  monday: { enabled: true, startHour: 9, endHour: 17 },
+  tuesday: { enabled: true, startHour: 9, endHour: 17 },
+  wednesday: { enabled: true, startHour: 9, endHour: 17 },
+  thursday: { enabled: true, startHour: 9, endHour: 17 },
+  friday: { enabled: true, startHour: 9, endHour: 17 },
+  saturday: { enabled: false, startHour: 9, endHour: 17 },
+};
 
 // Default configuration for new users
 const defaultConfig: Omit<SchedulerConfig, 'meetingTypes' | 'bookedSlots'> = {
@@ -12,16 +23,20 @@ const defaultConfig: Omit<SchedulerConfig, 'meetingTypes' | 'bookedSlots'> = {
   accentColor: '#4f46e5',
   startHour: 9,
   endHour: 17,
+  weeklyAvailability: defaultWeeklyAvailability,
   timezone: 'America/New_York',
+  calendarProvider: 'none',
   outlookEmail: '',
   outlookConnected: false,
+  googleEmail: '',
+  googleConnected: false,
 };
 
 // Default meeting types for new users
 const defaultMeetingTypes: Omit<MeetingType, 'id'>[] = [
-  { name: 'Quick Chat', duration: 15, description: 'A brief 15-minute consultation', color: '#10b981' },
-  { name: 'Standard Meeting', duration: 30, description: 'A focused 30-minute discussion', color: '#4f46e5' },
-  { name: 'Deep Dive', duration: 60, description: 'An in-depth 60-minute session', color: '#8b5cf6' },
+  { name: 'Quick Chat', duration: 15, description: 'A brief 15-minute consultation', color: '#10b981', locationType: 'virtual', location: '' },
+  { name: 'Standard Meeting', duration: 30, description: 'A focused 30-minute discussion', color: '#4f46e5', locationType: 'virtual', location: '' },
+  { name: 'Deep Dive', duration: 60, description: 'An in-depth 60-minute session', color: '#8b5cf6', locationType: 'virtual', location: '' },
 ];
 
 // Get user by slug or ID
@@ -51,17 +66,24 @@ export async function ensureUserConfig(userId: string): Promise<void> {
   const existing = await sql`SELECT id FROM scheduler_config WHERE user_id = ${userId}::uuid`;
   
   if (existing.length === 0) {
-    // Create default config
+    // Create default config with weekly availability
     await sql`
-      INSERT INTO scheduler_config (user_id, business_name, primary_color, accent_color, start_hour, end_hour, timezone)
-      VALUES (${userId}::uuid, ${defaultConfig.businessName}, ${defaultConfig.primaryColor}, ${defaultConfig.accentColor}, ${defaultConfig.startHour}, ${defaultConfig.endHour}, ${defaultConfig.timezone})
+      INSERT INTO scheduler_config (
+        user_id, business_name, primary_color, accent_color, start_hour, end_hour, 
+        timezone, calendar_provider, weekly_availability
+      )
+      VALUES (
+        ${userId}::uuid, ${defaultConfig.businessName}, ${defaultConfig.primaryColor}, 
+        ${defaultConfig.accentColor}, ${defaultConfig.startHour}, ${defaultConfig.endHour}, 
+        ${defaultConfig.timezone}, ${defaultConfig.calendarProvider}, ${JSON.stringify(defaultWeeklyAvailability)}
+      )
     `;
     
     // Create default meeting types
     for (const mt of defaultMeetingTypes) {
       await sql`
-        INSERT INTO meeting_types (user_id, name, duration, description, color, sort_order)
-        VALUES (${userId}::uuid, ${mt.name}, ${mt.duration}, ${mt.description || ''}, ${mt.color}, ${defaultMeetingTypes.indexOf(mt) + 1})
+        INSERT INTO meeting_types (user_id, name, duration, description, color, sort_order, location_type, location)
+        VALUES (${userId}::uuid, ${mt.name}, ${mt.duration}, ${mt.description || ''}, ${mt.color}, ${defaultMeetingTypes.indexOf(mt) + 1}, ${mt.locationType}, ${mt.location || ''})
       `;
     }
   }
@@ -76,7 +98,9 @@ export async function getConfig(userId: string): Promise<SchedulerConfig> {
   
   // Get config
   const configResult = await sql`
-    SELECT business_name, logo, primary_color, accent_color, start_hour, end_hour, timezone, outlook_email, outlook_connected
+    SELECT business_name, logo, primary_color, accent_color, start_hour, end_hour, timezone, 
+           outlook_email, outlook_connected, google_email, google_connected, calendar_provider,
+           weekly_availability
     FROM scheduler_config
     WHERE user_id = ${userId}::uuid
   `;
@@ -85,19 +109,33 @@ export async function getConfig(userId: string): Promise<SchedulerConfig> {
   
   // Get meeting types
   const meetingTypes = await sql`
-    SELECT id, name, duration, description, color
+    SELECT id, name, duration, description, color, location_type, location
     FROM meeting_types
     WHERE user_id = ${userId}::uuid AND is_active = true
     ORDER BY sort_order ASC, created_at ASC
   `;
   
-  // Get booked slots
+  // Get booked slots - handle both old and new column names
   const bookedSlots = await sql`
-    SELECT id, date, time, duration, meeting_type_name, client_name, client_email, notes, outlook_event_id, created_at
+    SELECT id, date, time, duration, meeting_type_name, client_name, client_email, client_phone,
+           notes, COALESCE(calendar_event_id, outlook_event_id) as calendar_event_id, 
+           location_type, location, created_at
     FROM bookings
     WHERE user_id = ${userId}::uuid AND status = 'confirmed'
     ORDER BY date ASC, time ASC
   `;
+  
+  // Parse weekly availability or use defaults
+  let weeklyAvailability: WeeklyAvailability = defaultWeeklyAvailability;
+  if (config.weekly_availability) {
+    try {
+      weeklyAvailability = typeof config.weekly_availability === 'string' 
+        ? JSON.parse(config.weekly_availability) 
+        : config.weekly_availability;
+    } catch (e) {
+      console.error('Failed to parse weekly_availability:', e);
+    }
+  }
   
   return {
     businessName: config.business_name,
@@ -106,15 +144,21 @@ export async function getConfig(userId: string): Promise<SchedulerConfig> {
     accentColor: config.accent_color,
     startHour: config.start_hour,
     endHour: config.end_hour,
+    weeklyAvailability,
     timezone: config.timezone,
+    calendarProvider: (config.calendar_provider as CalendarProvider) || 'none',
     outlookEmail: config.outlook_email || '',
-    outlookConnected: config.outlook_connected,
+    outlookConnected: config.outlook_connected || false,
+    googleEmail: config.google_email || '',
+    googleConnected: config.google_connected || false,
     meetingTypes: meetingTypes.map(mt => ({
       id: mt.id,
       name: mt.name,
       duration: mt.duration as 15 | 30 | 60,
       description: mt.description || '',
       color: mt.color,
+      locationType: mt.location_type || 'virtual',
+      location: mt.location || '',
     })),
     bookedSlots: bookedSlots.map(slot => ({
       id: slot.id,
@@ -124,8 +168,11 @@ export async function getConfig(userId: string): Promise<SchedulerConfig> {
       meetingType: slot.meeting_type_name,
       clientName: slot.client_name,
       clientEmail: slot.client_email,
+      clientPhone: slot.client_phone,
       notes: slot.notes,
-      outlookEventId: slot.outlook_event_id,
+      locationType: slot.location_type,
+      location: slot.location,
+      calendarEventId: slot.calendar_event_id,
       createdAt: slot.created_at,
     })),
   };
@@ -137,12 +184,16 @@ export async function updateConfig(userId: string, updates: Partial<SchedulerCon
   await ensureUserConfig(userId);
   
   // Update scheduler_config table
-  if (updates.businessName !== undefined || updates.logo !== undefined || 
+  const hasConfigUpdates = updates.businessName !== undefined || updates.logo !== undefined || 
       updates.primaryColor !== undefined || updates.accentColor !== undefined ||
       updates.startHour !== undefined || updates.endHour !== undefined || 
       updates.timezone !== undefined || updates.outlookEmail !== undefined ||
-      updates.outlookConnected !== undefined) {
-    
+      updates.outlookConnected !== undefined || updates.googleEmail !== undefined ||
+      updates.googleConnected !== undefined || updates.calendarProvider !== undefined ||
+      updates.weeklyAvailability !== undefined;
+  
+  if (hasConfigUpdates) {
+    // Build dynamic update - we need to handle this carefully for optional fields
     await sql`
       UPDATE scheduler_config SET
         business_name = COALESCE(${updates.businessName ?? null}, business_name),
@@ -153,7 +204,11 @@ export async function updateConfig(userId: string, updates: Partial<SchedulerCon
         end_hour = COALESCE(${updates.endHour ?? null}, end_hour),
         timezone = COALESCE(${updates.timezone ?? null}, timezone),
         outlook_email = COALESCE(${updates.outlookEmail ?? null}, outlook_email),
-        outlook_connected = COALESCE(${updates.outlookConnected ?? null}, outlook_connected)
+        outlook_connected = COALESCE(${updates.outlookConnected ?? null}, outlook_connected),
+        google_email = COALESCE(${updates.googleEmail ?? null}, google_email),
+        google_connected = COALESCE(${updates.googleConnected ?? null}, google_connected),
+        calendar_provider = COALESCE(${updates.calendarProvider ?? null}, calendar_provider),
+        weekly_availability = COALESCE(${updates.weeklyAvailability ? JSON.stringify(updates.weeklyAvailability) : null}::jsonb, weekly_availability)
       WHERE user_id = ${userId}::uuid
     `;
   }
@@ -177,21 +232,23 @@ export async function updateConfig(userId: string, updates: Partial<SchedulerCon
               duration = ${mt.duration},
               description = ${mt.description || ''},
               color = ${mt.color},
+              location_type = ${mt.locationType || 'virtual'},
+              location = ${mt.location || ''},
               sort_order = ${i + 1}
             WHERE id = ${mt.id}::uuid AND user_id = ${userId}::uuid
           `;
         } else {
           await sql`
-            INSERT INTO meeting_types (id, user_id, name, duration, description, color, sort_order)
-            VALUES (${mt.id}::uuid, ${userId}::uuid, ${mt.name}, ${mt.duration}, ${mt.description || ''}, ${mt.color}, ${i + 1})
+            INSERT INTO meeting_types (id, user_id, name, duration, description, color, sort_order, location_type, location)
+            VALUES (${mt.id}::uuid, ${userId}::uuid, ${mt.name}, ${mt.duration}, ${mt.description || ''}, ${mt.color}, ${i + 1}, ${mt.locationType || 'virtual'}, ${mt.location || ''})
           `;
         }
       } else {
         // Insert new with generated UUID
         const newId = uuidv4();
         await sql`
-          INSERT INTO meeting_types (id, user_id, name, duration, description, color, sort_order)
-          VALUES (${newId}::uuid, ${userId}::uuid, ${mt.name}, ${mt.duration}, ${mt.description || ''}, ${mt.color}, ${i + 1})
+          INSERT INTO meeting_types (id, user_id, name, duration, description, color, sort_order, location_type, location)
+          VALUES (${newId}::uuid, ${userId}::uuid, ${mt.name}, ${mt.duration}, ${mt.description || ''}, ${mt.color}, ${i + 1}, ${mt.locationType || 'virtual'}, ${mt.location || ''})
         `;
       }
     }
@@ -217,7 +274,9 @@ export async function getBookings(userId: string): Promise<BookedSlot[]> {
   noStore();
   
   const bookings = await sql`
-    SELECT id, date, time, duration, meeting_type_name, client_name, client_email, notes, outlook_event_id, status, created_at
+    SELECT id, date, time, duration, meeting_type_name, client_name, client_email, client_phone,
+           notes, COALESCE(calendar_event_id, outlook_event_id) as calendar_event_id, 
+           location_type, location, status, created_at
     FROM bookings
     WHERE user_id = ${userId}::uuid
     ORDER BY date DESC, time DESC
@@ -231,8 +290,11 @@ export async function getBookings(userId: string): Promise<BookedSlot[]> {
     meetingType: slot.meeting_type_name,
     clientName: slot.client_name,
     clientEmail: slot.client_email,
+    clientPhone: slot.client_phone,
     notes: slot.notes,
-    outlookEventId: slot.outlook_event_id,
+    locationType: slot.location_type,
+    location: slot.location,
+    calendarEventId: slot.calendar_event_id,
     createdAt: slot.created_at,
   }));
 }
@@ -240,7 +302,9 @@ export async function getBookings(userId: string): Promise<BookedSlot[]> {
 // Get booking by ID
 export async function getBookingById(bookingId: string): Promise<BookedSlot | null> {
   const result = await sql`
-    SELECT id, date, time, duration, meeting_type_name, client_name, client_email, notes, outlook_event_id, created_at
+    SELECT id, date, time, duration, meeting_type_name, client_name, client_email, client_phone,
+           notes, COALESCE(calendar_event_id, outlook_event_id) as calendar_event_id, 
+           location_type, location, created_at
     FROM bookings
     WHERE id = ${bookingId}::uuid
   `;
@@ -256,8 +320,11 @@ export async function getBookingById(bookingId: string): Promise<BookedSlot | nu
     meetingType: slot.meeting_type_name,
     clientName: slot.client_name,
     clientEmail: slot.client_email,
+    clientPhone: slot.client_phone,
     notes: slot.notes,
-    outlookEventId: slot.outlook_event_id,
+    locationType: slot.location_type,
+    location: slot.location,
+    calendarEventId: slot.calendar_event_id,
     createdAt: slot.created_at,
   };
 }
@@ -268,8 +335,8 @@ export async function addBooking(userId: string, booking: Omit<BookedSlot, 'id' 
   const now = new Date().toISOString();
   
   await sql`
-    INSERT INTO bookings (id, user_id, date, time, duration, meeting_type_name, client_name, client_email, notes, outlook_event_id)
-    VALUES (${id}::uuid, ${userId}::uuid, ${booking.date}, ${booking.time}, ${booking.duration}, ${booking.meetingType}, ${booking.clientName}, ${booking.clientEmail}, ${booking.notes || null}, ${booking.outlookEventId || null})
+    INSERT INTO bookings (id, user_id, date, time, duration, meeting_type_name, client_name, client_email, client_phone, notes, calendar_event_id, location_type, location)
+    VALUES (${id}::uuid, ${userId}::uuid, ${booking.date}, ${booking.time}, ${booking.duration}, ${booking.meetingType}, ${booking.clientName}, ${booking.clientEmail}, ${booking.clientPhone || null}, ${booking.notes || null}, ${booking.calendarEventId || null}, ${booking.locationType || null}, ${booking.location || null})
   `;
   
   return {
@@ -286,7 +353,7 @@ export async function updateBooking(bookingId: string, updates: Partial<BookedSl
       date = COALESCE(${updates.date ?? null}, date),
       time = COALESCE(${updates.time ?? null}, time),
       notes = COALESCE(${updates.notes ?? null}, notes),
-      outlook_event_id = COALESCE(${updates.outlookEventId ?? null}, outlook_event_id)
+      calendar_event_id = COALESCE(${updates.calendarEventId ?? null}, calendar_event_id)
     WHERE id = ${bookingId}::uuid
   `;
   
@@ -331,11 +398,30 @@ export async function getAvailableSlots(userId: string, date: string, duration: 
   const config = await getConfig(userId);
   const slots: string[] = [];
   
+  // Get day of week from date
+  const dateObj = new Date(date + 'T12:00:00'); // Use noon to avoid timezone issues
+  const dayOfWeek = dateObj.getDay();
+  const dayNames: Array<keyof WeeklyAvailability> = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const dayName = dayNames[dayOfWeek];
+  
+  // Get availability for this day
+  const dayAvailability = config.weeklyAvailability?.[dayName];
+  
+  // If no weekly availability configured, fall back to legacy startHour/endHour
+  const startHour = dayAvailability?.startHour ?? config.startHour;
+  const endHour = dayAvailability?.endHour ?? config.endHour;
+  const isEnabled = dayAvailability?.enabled ?? true;
+  
+  // If day is not enabled, return empty slots
+  if (!isEnabled) {
+    return [];
+  }
+  
   // Generate all possible slots
-  for (let hour = config.startHour; hour < config.endHour; hour++) {
+  for (let hour = startHour; hour < endHour; hour++) {
     for (let minute = 0; minute < 60; minute += 15) {
       const slotEnd = hour * 60 + minute + duration;
-      if (slotEnd <= config.endHour * 60) {
+      if (slotEnd <= endHour * 60) {
         const time = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
         if (await isSlotAvailable(userId, date, time, duration)) {
           slots.push(time);

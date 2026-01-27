@@ -74,13 +74,41 @@ export default function BookingPage() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [availableSlots, setAvailableSlots] = useState<TimeSlot[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
-  const [bookingDetails, setBookingDetails] = useState({ name: '', email: '', notes: '' });
+  const [bookingDetails, setBookingDetails] = useState({ name: '', email: '', phone: '', notes: '' });
+  const [phoneError, setPhoneError] = useState<string | null>(null);
   const [isBooking, setIsBooking] = useState(false);
   const [bookingComplete, setBookingComplete] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+
+  // Phone validation function
+  const validatePhone = (phone: string): boolean => {
+    // Remove all non-digit characters
+    const digits = phone.replace(/\D/g, '');
+    // Valid phone numbers should have 10-15 digits
+    return digits.length >= 10 && digits.length <= 15;
+  };
+
+  // Format phone number for display
+  const formatPhoneInput = (value: string): string => {
+    const digits = value.replace(/\D/g, '');
+    if (digits.length <= 3) return digits;
+    if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6, 10)}`;
+  };
+
+  // Check if a day is available based on weekly availability
+  const isDayAvailable = (date: Date): boolean => {
+    if (!config?.weeklyAvailability) return true; // Default to available if no config
+    
+    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
+    const dayName = dayNames[date.getDay()];
+    const dayConfig = config.weeklyAvailability[dayName];
+    
+    return dayConfig?.enabled ?? true;
+  };
 
   // Load config for this user
   useEffect(() => {
@@ -122,8 +150,21 @@ export default function BookingPage() {
   const handleBooking = async () => {
     if (!bookingDetails.name || !bookingDetails.email || !selectedDate || !selectedTime || !selectedMeeting) return;
     
+    // Validate phone number for phone call meetings
+    if (selectedMeeting.locationType === 'phone') {
+      if (!bookingDetails.phone) {
+        setPhoneError('Phone number is required for phone call meetings');
+        return;
+      }
+      if (!validatePhone(bookingDetails.phone)) {
+        setPhoneError('Please enter a valid phone number');
+        return;
+      }
+    }
+    
     setIsBooking(true);
     setError(null);
+    setPhoneError(null);
     
     try {
       const response = await fetch('/api/bookings', {
@@ -137,7 +178,10 @@ export default function BookingPage() {
           meetingType: selectedMeeting.name,
           clientName: bookingDetails.name,
           clientEmail: bookingDetails.email,
+          clientPhone: selectedMeeting.locationType === 'phone' ? bookingDetails.phone : undefined,
           notes: bookingDetails.notes,
+          locationType: selectedMeeting.locationType,
+          location: selectedMeeting.location,
         }),
       });
       
@@ -160,9 +204,10 @@ export default function BookingPage() {
     setSelectedMeeting(null);
     setSelectedDate(null);
     setSelectedTime(null);
-    setBookingDetails({ name: '', email: '', notes: '' });
+    setBookingDetails({ name: '', email: '', phone: '', notes: '' });
     setBookingComplete(false);
     setError(null);
+    setPhoneError(null);
   };
 
   if (loading) {
@@ -364,7 +409,28 @@ export default function BookingPage() {
                     <h3 className="text-lg font-semibold mb-1" style={{ color: primaryColor }}>
                       {mt.name}
                     </h3>
-                    <p className="text-slate-500 text-sm">{mt.description}</p>
+                    <p className="text-slate-500 text-sm mb-2">{mt.description}</p>
+                    {/* Location Info */}
+                    <div className="flex items-center gap-2 text-xs text-slate-400">
+                      {mt.locationType === 'in_person' && (
+                        <>
+                          <span>📍</span>
+                          <span>{mt.location || 'In Person'}</span>
+                        </>
+                      )}
+                      {mt.locationType === 'phone' && (
+                        <>
+                          <span>📞</span>
+                          <span>Phone Call</span>
+                        </>
+                      )}
+                      {mt.locationType === 'virtual' && (
+                        <>
+                          <span>💻</span>
+                          <span>Virtual Meeting</span>
+                        </>
+                      )}
+                    </div>
                   </div>
                   <div 
                     className="px-5 py-2.5 rounded-full text-sm font-semibold"
@@ -426,10 +492,10 @@ export default function BookingPage() {
                   for (let day = 1; day <= daysInMonth; day++) {
                     const date = new Date(year, month, day);
                     const isPast = date < today;
-                    const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+                    const isUnavailable = !isDayAvailable(date);
                     const isSelected = selectedDate && date.toDateString() === selectedDate.toDateString();
                     const isToday = date.toDateString() === today.toDateString();
-                    const isDisabled = isPast || isWeekend;
+                    const isDisabled = isPast || isUnavailable;
                     
                     days.push(
                       <button
@@ -512,22 +578,45 @@ export default function BookingPage() {
             <div className="bg-white rounded-2xl p-8 shadow-lg animate-slide-up">
               {/* Meeting Summary */}
               <div 
-                className="p-5 rounded-xl mb-7 flex items-center gap-4"
+                className="p-5 rounded-xl mb-7"
                 style={{ background: `${selectedMeeting?.color}15` }}
               >
-                <div className="w-1.5 h-12 rounded" style={{ background: selectedMeeting?.color }} />
-                <div className="flex-1">
-                  <h4 className="font-semibold mb-1" style={{ color: primaryColor }}>
-                    {selectedMeeting?.name}
-                  </h4>
-                  <div className="flex gap-4 text-slate-500 text-sm">
-                    <span className="flex items-center gap-1.5">
-                      <CalendarIcon /> {selectedDate && formatDate(selectedDate)}
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <ClockIcon /> {selectedTime?.display}
-                    </span>
+                <div className="flex items-center gap-4 mb-3">
+                  <div className="w-1.5 h-12 rounded" style={{ background: selectedMeeting?.color }} />
+                  <div className="flex-1">
+                    <h4 className="font-semibold mb-1" style={{ color: primaryColor }}>
+                      {selectedMeeting?.name}
+                    </h4>
+                    <div className="flex gap-4 text-slate-500 text-sm">
+                      <span className="flex items-center gap-1.5">
+                        <CalendarIcon /> {selectedDate && formatDate(selectedDate)}
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <ClockIcon /> {selectedTime?.display}
+                      </span>
+                    </div>
                   </div>
+                </div>
+                {/* Location Info */}
+                <div className="ml-6 pl-4 border-l-2 border-slate-200 text-sm text-slate-500">
+                  {selectedMeeting?.locationType === 'in_person' && (
+                    <div className="flex items-center gap-2">
+                      <span>📍</span>
+                      <span>{selectedMeeting.location}</span>
+                    </div>
+                  )}
+                  {selectedMeeting?.locationType === 'phone' && (
+                    <div className="flex items-center gap-2">
+                      <span>📞</span>
+                      <span>We'll call you at the number you provide below</span>
+                    </div>
+                  )}
+                  {selectedMeeting?.locationType === 'virtual' && (
+                    <div className="flex items-center gap-2">
+                      <span>💻</span>
+                      <span>Join via: <a href={selectedMeeting.location} target="_blank" rel="noopener noreferrer" className="text-indigo-500 hover:underline">{selectedMeeting.location}</a></span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -559,6 +648,36 @@ export default function BookingPage() {
                   />
                 </div>
 
+                {/* Phone Number - Required for phone call meetings */}
+                {selectedMeeting?.locationType === 'phone' && (
+                  <div>
+                    <label className="block text-slate-500 text-sm font-medium mb-2">
+                      Your Phone Number *
+                    </label>
+                    <input
+                      type="tel"
+                      value={bookingDetails.phone}
+                      onChange={(e) => {
+                        const formatted = formatPhoneInput(e.target.value);
+                        setBookingDetails({ ...bookingDetails, phone: formatted });
+                        setPhoneError(null);
+                      }}
+                      placeholder="(555) 555-5555"
+                      className={`w-full px-4 py-3.5 rounded-xl border text-base focus:ring-2 transition-all outline-none ${
+                        phoneError 
+                          ? 'border-red-300 focus:border-red-400 focus:ring-red-100' 
+                          : 'border-slate-200 focus:border-indigo-400 focus:ring-indigo-100'
+                      }`}
+                    />
+                    {phoneError && (
+                      <p className="text-red-500 text-sm mt-1">{phoneError}</p>
+                    )}
+                    <p className="text-slate-400 text-xs mt-1">
+                      We'll call you at this number at your scheduled time
+                    </p>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-slate-500 text-sm font-medium mb-2">
                     Additional Notes
@@ -581,14 +700,14 @@ export default function BookingPage() {
                   </button>
                   <button
                     onClick={handleBooking}
-                    disabled={!bookingDetails.name || !bookingDetails.email || isBooking}
+                    disabled={!bookingDetails.name || !bookingDetails.email || (selectedMeeting?.locationType === 'phone' && !bookingDetails.phone) || isBooking}
                     className="flex-1 px-8 py-3.5 rounded-xl text-white font-semibold transition-all flex items-center justify-center gap-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{
-                      background: (!bookingDetails.name || !bookingDetails.email)
+                      background: (!bookingDetails.name || !bookingDetails.email || (selectedMeeting?.locationType === 'phone' && !bookingDetails.phone))
                         ? '#e2e8f0'
                         : `linear-gradient(135deg, ${accentColor}, ${selectedMeeting?.color})`,
-                      color: (!bookingDetails.name || !bookingDetails.email) ? '#94a3b8' : '#fff',
-                      boxShadow: (!bookingDetails.name || !bookingDetails.email)
+                      color: (!bookingDetails.name || !bookingDetails.email || (selectedMeeting?.locationType === 'phone' && !bookingDetails.phone)) ? '#94a3b8' : '#fff',
+                      boxShadow: (!bookingDetails.name || !bookingDetails.email || (selectedMeeting?.locationType === 'phone' && !bookingDetails.phone))
                         ? 'none'
                         : `0 4px 20px ${accentColor}40`,
                     }}

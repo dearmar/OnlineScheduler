@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getConfig, getAvailableSlots, getUserBySlugOrId } from '@/lib/storage';
 import { getFreeBusySchedule, isConnected } from '@/lib/microsoft-graph';
+import { isGoogleConnected, getGoogleFreeBusySchedule } from '@/lib/google-calendar';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,26 +55,31 @@ export async function GET(request: NextRequest) {
       );
     }
     
-    // Check if date is a weekend
-    const dateObj = new Date(date);
-    const dayOfWeek = dateObj.getUTCDay();
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
+    // Get available slots from database (this already checks weekly availability)
+    let slots = await getAvailableSlots(user.id, date, duration);
+    
+    // If no slots (day is disabled or no availability), return empty
+    if (slots.length === 0) {
       return NextResponse.json({
         success: true,
         data: [],
       });
     }
     
-    // Get available slots from database
-    let slots = await getAvailableSlots(user.id, date, duration);
-    
     // Get config for timezone and calendar sync check
     const config = await getConfig(user.id);
     
-    // If Outlook is connected and calendar sync is enabled, filter out busy times
-    if (await isConnected(user.id) && process.env.ENABLE_CALENDAR_SYNC === 'true') {
+    // Check calendar sync based on configured provider
+    const calendarProvider = config.calendarProvider || 'none';
+    let busyTimes: Array<{ start: string; end: string }> = [];
+    
+    if (process.env.ENABLE_CALENDAR_SYNC === 'true' && calendarProvider !== 'none') {
       try {
-        const busyTimes = await getFreeBusySchedule(user.id, date, date, config.timezone);
+        if (calendarProvider === 'outlook' && await isConnected(user.id)) {
+          busyTimes = await getFreeBusySchedule(user.id, date, date, config.timezone) || [];
+        } else if (calendarProvider === 'google' && await isGoogleConnected(user.id)) {
+          busyTimes = await getGoogleFreeBusySchedule(user.id, date, date, config.timezone) || [];
+        }
         
         if (busyTimes.length > 0) {
           slots = slots.filter(slot => {

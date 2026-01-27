@@ -191,7 +191,11 @@ export async function refreshAccessToken(userId: string): Promise<MicrosoftToken
 
 // Store tokens in database for user
 async function storeTokens(userId: string, tokens: MicrosoftTokens): Promise<void> {
-  console.log(`[Graph] storeTokens for user ${userId}, expires_at: ${tokens.expiresAt}`);
+  console.log(`[Graph] storeTokens for user ${userId}`);
+  console.log(`[Graph] - accessToken length: ${tokens.accessToken?.length || 0}`);
+  console.log(`[Graph] - refreshToken length: ${tokens.refreshToken?.length || 0}`);
+  console.log(`[Graph] - expiresAt: ${tokens.expiresAt} (${new Date(tokens.expiresAt).toISOString()})`);
+  console.log(`[Graph] - scope: ${tokens.scope}`);
   
   await sql`
     INSERT INTO microsoft_tokens (user_id, access_token, refresh_token, expires_at, scope)

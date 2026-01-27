@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { unstable_noStore as noStore } from 'next/cache';
 import { getConfig, updateConfig, getUserBySlugOrId } from '@/lib/storage';
 import { isConnected } from '@/lib/microsoft-graph';
+import { isGoogleConnected } from '@/lib/google-calendar';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { noCacheResponse } from '@/lib/api-helpers';
 
@@ -35,7 +36,10 @@ export async function GET(request: NextRequest) {
     }
     
     const config = await getConfig(userId);
+    
+    // Check actual connection status for both providers
     const outlookConnected = await isConnected(userId);
+    const googleConnected = await isGoogleConnected(userId);
     
     const publicConfig = {
       businessName: config.businessName,
@@ -44,9 +48,14 @@ export async function GET(request: NextRequest) {
       accentColor: config.accentColor,
       startHour: config.startHour,
       endHour: config.endHour,
+      weeklyAvailability: config.weeklyAvailability,
       timezone: config.timezone,
-      meetingTypes: config.meetingTypes,
+      calendarProvider: config.calendarProvider,
+      outlookEmail: config.outlookEmail,
       outlookConnected,
+      googleEmail: config.googleEmail,
+      googleConnected,
+      meetingTypes: config.meetingTypes,
     };
     
     return noCacheResponse({ success: true, data: publicConfig });
@@ -69,7 +78,7 @@ export async function PUT(request: NextRequest) {
     
     const updates = await request.json();
     
-    // Validate updates
+    // Validate legacy hours if provided
     if (updates.startHour !== undefined && (updates.startHour < 0 || updates.startHour > 23)) {
       return noCacheResponse({ success: false, error: 'Invalid start hour' }, 400);
     }
@@ -80,6 +89,37 @@ export async function PUT(request: NextRequest) {
     
     if (updates.startHour !== undefined && updates.endHour !== undefined && updates.startHour >= updates.endHour) {
       return noCacheResponse({ success: false, error: 'Start hour must be before end hour' }, 400);
+    }
+    
+    // Validate weekly availability if provided
+    if (updates.weeklyAvailability) {
+      const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      for (const day of days) {
+        const dayConfig = updates.weeklyAvailability[day];
+        if (dayConfig) {
+          if (dayConfig.startHour !== undefined && (dayConfig.startHour < 0 || dayConfig.startHour > 23)) {
+            return noCacheResponse({ success: false, error: `Invalid start hour for ${day}` }, 400);
+          }
+          if (dayConfig.endHour !== undefined && (dayConfig.endHour < 1 || dayConfig.endHour > 24)) {
+            return noCacheResponse({ success: false, error: `Invalid end hour for ${day}` }, 400);
+          }
+          if (dayConfig.startHour !== undefined && dayConfig.endHour !== undefined && dayConfig.startHour >= dayConfig.endHour) {
+            return noCacheResponse({ success: false, error: `Start hour must be before end hour for ${day}` }, 400);
+          }
+        }
+      }
+    }
+    
+    // Validate meeting types if provided
+    if (updates.meetingTypes) {
+      for (const mt of updates.meetingTypes) {
+        if (mt.locationType === 'in_person' && !mt.location) {
+          return noCacheResponse({ success: false, error: `Location is required for in-person meetings (${mt.name})` }, 400);
+        }
+        if (mt.locationType === 'virtual' && !mt.location) {
+          return noCacheResponse({ success: false, error: `Meeting link is required for virtual meetings (${mt.name})` }, 400);
+        }
+      }
     }
     
     const newConfig = await updateConfig(authUser.userId, updates);

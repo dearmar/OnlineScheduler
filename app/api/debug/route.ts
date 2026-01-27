@@ -39,6 +39,50 @@ export async function GET(request: NextRequest) {
       });
     }
     
+    if (action === 'tokens') {
+      if (!authUser) {
+        return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+      }
+      
+      // Check token status in database
+      const tokens = await sql`
+        SELECT 
+          user_id,
+          LENGTH(access_token) as access_token_length,
+          LENGTH(refresh_token) as refresh_token_length,
+          expires_at,
+          scope,
+          updated_at
+        FROM microsoft_tokens 
+        WHERE user_id = ${authUser.userId}
+      `;
+      
+      if (tokens.length === 0) {
+        return NextResponse.json({
+          status: 'no_tokens',
+          userId: authUser.userId,
+          message: 'No Microsoft tokens found for this user'
+        });
+      }
+      
+      const token = tokens[0];
+      const now = Date.now();
+      const expiresAt = Number(token.expires_at);
+      
+      return NextResponse.json({
+        status: 'ok',
+        userId: authUser.userId,
+        accessTokenLength: token.access_token_length,
+        refreshTokenLength: token.refresh_token_length,
+        hasRefreshToken: token.refresh_token_length > 0,
+        expiresAt: new Date(expiresAt).toISOString(),
+        isExpired: now > expiresAt,
+        expiresInMinutes: Math.round((expiresAt - now) / 60000),
+        scope: token.scope,
+        updatedAt: token.updated_at
+      });
+    }
+    
     if (action === 'test-update') {
       if (!authUser) {
         return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
@@ -55,7 +99,7 @@ export async function GET(request: NextRequest) {
       });
     }
     
-    return NextResponse.json({ error: 'Unknown action' });
+    return NextResponse.json({ error: 'Unknown action. Use action=status, action=tokens, or action=test-update' });
   } catch (error: any) {
     return NextResponse.json({
       status: 'error',

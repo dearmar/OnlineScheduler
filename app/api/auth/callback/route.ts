@@ -53,8 +53,8 @@ export async function GET(request: NextRequest) {
 
     // Exchange code for tokens (stores them for user)
     console.log(`[Callback] Exchanging code for tokens for user ${userId}`);
-    await exchangeCodeForTokens(code, userId);
-    console.log(`[Callback] Tokens exchanged successfully`);
+    const tokens = await exchangeCodeForTokens(code, userId);
+    console.log(`[Callback] Tokens exchanged - accessToken: ${tokens.accessToken ? 'yes' : 'no'}, refreshToken: ${tokens.refreshToken ? `yes (${tokens.refreshToken.length} chars)` : 'NO!'}, expiresAt: ${tokens.expiresAt}`);
     
     // Get user profile to update config
     const profile = await getUserProfile(userId);
