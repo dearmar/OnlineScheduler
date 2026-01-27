@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getBookingById, updateBooking, deleteBooking, getConfig, getUserIdFromBooking } from '@/lib/storage';
 import { deleteCalendarEvent, updateCalendarEvent, isConnected, getWindowsTimezone } from '@/lib/microsoft-graph';
+import { deleteGoogleCalendarEvent, updateGoogleCalendarEvent, isGoogleConnected } from '@/lib/google-calendar';
 import { sendCancellationEmail } from '@/lib/email';
 import { getAuthenticatedUser } from '@/lib/auth';
 
@@ -90,18 +91,30 @@ export async function PUT(
       );
     }
     
-    // Update calendar event if Outlook is connected
-    if (booking.outlookEventId && await isConnected(authUser.userId)) {
+    // Update calendar event based on provider
+    if (booking.calendarEventId && (updates.date || updates.time)) {
       const config = await getConfig(authUser.userId);
-      const windowsTimezone = getWindowsTimezone(config.timezone);
       
-      if (updates.date || updates.time) {
-        await updateCalendarEvent(authUser.userId, booking.outlookEventId, {
-          start: {
-            dateTime: `${updates.date || booking.date}T${updates.time || booking.time}:00`,
-            timeZone: windowsTimezone,
-          },
-        });
+      try {
+        if (config.calendarProvider === 'outlook' && await isConnected(authUser.userId)) {
+          const windowsTimezone = getWindowsTimezone(config.timezone);
+          await updateCalendarEvent(authUser.userId, booking.calendarEventId, {
+            start: {
+              dateTime: `${updates.date || booking.date}T${updates.time || booking.time}:00`,
+              timeZone: windowsTimezone,
+            },
+          });
+        } else if (config.calendarProvider === 'google' && await isGoogleConnected(authUser.userId)) {
+          await updateGoogleCalendarEvent(authUser.userId, booking.calendarEventId, {
+            start: {
+              dateTime: `${updates.date || booking.date}T${updates.time || booking.time}:00`,
+              timeZone: config.timezone,
+            },
+          });
+        }
+      } catch (calendarError) {
+        console.error('Calendar update error:', calendarError);
+        // Continue with booking update even if calendar fails
       }
     }
     
@@ -155,9 +168,20 @@ export async function DELETE(
       );
     }
     
-    // Delete calendar event if Outlook is connected
-    if (booking.outlookEventId && await isConnected(authUser.userId)) {
-      await deleteCalendarEvent(authUser.userId, booking.outlookEventId);
+    // Delete calendar event based on provider
+    if (booking.calendarEventId) {
+      const config = await getConfig(authUser.userId);
+      
+      try {
+        if (config.calendarProvider === 'outlook' && await isConnected(authUser.userId)) {
+          await deleteCalendarEvent(authUser.userId, booking.calendarEventId);
+        } else if (config.calendarProvider === 'google' && await isGoogleConnected(authUser.userId)) {
+          await deleteGoogleCalendarEvent(authUser.userId, booking.calendarEventId);
+        }
+      } catch (calendarError) {
+        console.error('Calendar delete error:', calendarError);
+        // Continue with booking cancellation even if calendar fails
+      }
     }
     
     // Cancel booking in database
