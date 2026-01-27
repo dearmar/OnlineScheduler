@@ -1,5 +1,4 @@
 // Microsoft Graph API integration for Outlook Calendar - Multi-tenant version
-import { ConfidentialClientApplication, AuthorizationCodeRequest, RefreshTokenRequest } from '@azure/msal-node';
 import { Client } from '@microsoft/microsoft-graph-client';
 import { MicrosoftTokens, OutlookEvent } from './types';
 import { sql } from './db/client';
@@ -41,15 +40,6 @@ export function getWindowsTimezone(ianaTimezone: string): string {
   return ianaToWindowsTimezone[ianaTimezone] || ianaTimezone;
 }
 
-// MSAL configuration
-const msalConfig = {
-  auth: {
-    clientId: process.env.MICROSOFT_CLIENT_ID!,
-    clientSecret: process.env.MICROSOFT_CLIENT_SECRET!,
-    authority: `https://login.microsoftonline.com/${process.env.MICROSOFT_TENANT_ID || 'common'}`,
-  },
-};
-
 // Required scopes for calendar and email access
 const SCOPES = [
   'User.Read',
@@ -57,16 +47,6 @@ const SCOPES = [
   'Mail.Send',
   'offline_access',
 ];
-
-// Create MSAL client
-let msalClient: ConfidentialClientApplication | null = null;
-
-function getMsalClient(): ConfidentialClientApplication {
-  if (!msalClient) {
-    msalClient = new ConfidentialClientApplication(msalConfig);
-  }
-  return msalClient;
-}
 
 // Generate OAuth authorization URL
 export function getAuthorizationUrl(state: string): string {
@@ -87,72 +67,124 @@ export function getAuthorizationUrl(state: string): string {
 export async function exchangeCodeForTokens(code: string, userId: string): Promise<MicrosoftTokens> {
   console.log(`[Graph] exchangeCodeForTokens called for user ${userId}`);
   
-  const client = getMsalClient();
+  const tokenUrl = `https://login.microsoftonline.com/${process.env.MICROSOFT_TENANT_ID || 'common'}/oauth2/v2.0/token`;
   
-  const tokenRequest: AuthorizationCodeRequest = {
+  const params = new URLSearchParams({
+    client_id: process.env.MICROSOFT_CLIENT_ID!,
+    client_secret: process.env.MICROSOFT_CLIENT_SECRET!,
     code,
-    scopes: SCOPES,
-    redirectUri: process.env.MICROSOFT_REDIRECT_URI!,
-  };
+    redirect_uri: process.env.MICROSOFT_REDIRECT_URI!,
+    grant_type: 'authorization_code',
+    scope: SCOPES.join(' '),
+  });
 
-  console.log(`[Graph] Requesting tokens with scopes: ${SCOPES.join(', ')}`);
-  const response = await client.acquireTokenByCode(tokenRequest);
+  console.log(`[Graph] Requesting tokens from ${tokenUrl}`);
   
-  if (!response) {
-    throw new Error('Failed to acquire token');
+  const response = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: params.toString(),
+  });
+  
+  const data = await response.json();
+  
+  if (!response.ok) {
+    console.error(`[Graph] Token exchange failed:`, data);
+    throw new Error(data.error_description || data.error || 'Failed to exchange code for tokens');
   }
-
-  console.log(`[Graph] Token acquired, expires: ${response.expiresOn}`);
+  
+  console.log(`[Graph] Token exchange successful, has refresh_token: ${!!data.refresh_token}`);
 
   const tokens: MicrosoftTokens = {
-    accessToken: response.accessToken,
-    refreshToken: (response as any).refreshToken || '',
-    expiresAt: response.expiresOn?.getTime() || Date.now() + 3600000,
-    scope: response.scopes.join(' '),
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token || '',
+    expiresAt: Date.now() + (data.expires_in * 1000),
+    scope: data.scope,
   };
+
+  if (!tokens.refreshToken) {
+    console.warn(`[Graph] WARNING: No refresh token received! User may need to re-consent with offline_access scope`);
+  }
 
   // Store tokens for user
   await storeTokens(userId, tokens);
   
-  console.log(`[Graph] Tokens stored for user ${userId}`);
+  console.log(`[Graph] Tokens stored for user ${userId}, refresh_token length: ${tokens.refreshToken.length}`);
 
   return tokens;
 }
 
 // Refresh access token for user
 export async function refreshAccessToken(userId: string): Promise<MicrosoftTokens | null> {
+  console.log(`[Graph] refreshAccessToken called for user ${userId}`);
+  
   const storedTokens = await getStoredTokens(userId);
   
-  if (!storedTokens || !storedTokens.refreshToken) {
+  if (!storedTokens) {
+    console.log(`[Graph] No stored tokens found for user ${userId}`);
     return null;
   }
+  
+  if (!storedTokens.refreshToken) {
+    console.log(`[Graph] No refresh token available for user ${userId} - refresh token is empty`);
+    // Clear invalid tokens
+    await clearTokens(userId);
+    return null;
+  }
+  
+  console.log(`[Graph] Refresh token exists (length: ${storedTokens.refreshToken.length}), attempting refresh...`);
 
   try {
-    const client = getMsalClient();
+    const tokenUrl = `https://login.microsoftonline.com/${process.env.MICROSOFT_TENANT_ID || 'common'}/oauth2/v2.0/token`;
     
-    const tokenRequest: RefreshTokenRequest = {
-      refreshToken: storedTokens.refreshToken,
-      scopes: SCOPES,
-    };
+    const params = new URLSearchParams({
+      client_id: process.env.MICROSOFT_CLIENT_ID!,
+      client_secret: process.env.MICROSOFT_CLIENT_SECRET!,
+      refresh_token: storedTokens.refreshToken,
+      grant_type: 'refresh_token',
+      scope: SCOPES.join(' '),
+    });
 
-    const response = await client.acquireTokenByRefreshToken(tokenRequest);
+    console.log(`[Graph] Calling token refresh endpoint`);
     
-    if (!response) {
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: params.toString(),
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.error(`[Graph] Token refresh failed:`, data.error, data.error_description);
+      
+      // Clear tokens if refresh fails permanently
+      if (data.error === 'invalid_grant' || data.error === 'invalid_client') {
+        console.log(`[Graph] Clearing invalid tokens for user ${userId} - re-authentication required`);
+        await clearTokens(userId);
+      }
       return null;
     }
 
+    console.log(`[Graph] Token refresh successful, new expiry in ${data.expires_in} seconds`);
+
     const tokens: MicrosoftTokens = {
-      accessToken: response.accessToken,
-      refreshToken: (response as any).refreshToken || storedTokens.refreshToken,
-      expiresAt: response.expiresOn?.getTime() || Date.now() + 3600000,
-      scope: response.scopes.join(' '),
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token || storedTokens.refreshToken, // Microsoft may or may not return a new refresh token
+      expiresAt: Date.now() + (data.expires_in * 1000),
+      scope: data.scope,
     };
 
     await storeTokens(userId, tokens);
+    console.log(`[Graph] Refreshed tokens stored for user ${userId}`);
 
     return tokens;
-  } catch (error) {
-    console.error('Token refresh failed:', error);
+  } catch (error: any) {
+    console.error(`[Graph] Token refresh error for user ${userId}:`, error.message || error);
     return null;
   }
 }

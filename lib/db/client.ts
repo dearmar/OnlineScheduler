@@ -1,8 +1,5 @@
 // Neon Database client configuration
-import { neon, neonConfig, NeonQueryFunction } from '@neondatabase/serverless';
-
-// Enable connection pooling for serverless
-neonConfig.fetchConnectionCache = true;
+import { neon, NeonQueryFunction } from '@neondatabase/serverless';
 
 // Create SQL query function
 export const sql = neon(process.env.DATABASE_URL!);
