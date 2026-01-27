@@ -14,8 +14,10 @@ export async function GET(request: NextRequest) {
     const error = searchParams.get('error');
     const errorDescription = searchParams.get('error_description');
 
+    console.log(`[Callback] OAuth callback received - code: ${code ? 'yes' : 'no'}, state: ${state ? 'yes' : 'no'}, error: ${error || 'none'}`);
+
     if (error) {
-      console.error('OAuth error:', error, errorDescription);
+      console.error('[Callback] OAuth error:', error, errorDescription);
       return NextResponse.redirect(
         new URL(`/admin?error=${encodeURIComponent(errorDescription || error)}`, request.url)
       );
@@ -38,33 +40,39 @@ export async function GET(request: NextRequest) {
     try {
       const decodedState = JSON.parse(Buffer.from(state, 'base64').toString());
       userId = decodedState.userId;
+      console.log(`[Callback] Decoded state - userId: ${userId}`);
       if (!userId) {
         throw new Error('No userId in state');
       }
     } catch (e) {
+      console.error('[Callback] Failed to decode state:', e);
       return NextResponse.redirect(
         new URL('/admin?error=Invalid state parameter', request.url)
       );
     }
 
     // Exchange code for tokens (stores them for user)
+    console.log(`[Callback] Exchanging code for tokens for user ${userId}`);
     await exchangeCodeForTokens(code, userId);
+    console.log(`[Callback] Tokens exchanged successfully`);
     
     // Get user profile to update config
     const profile = await getUserProfile(userId);
+    console.log(`[Callback] Got profile:`, profile ? profile.email : 'null');
     
     if (profile) {
       await updateConfig(userId, {
         outlookEmail: profile.email,
         outlookConnected: true,
       });
+      console.log(`[Callback] Updated config with Outlook email`);
     }
 
     return NextResponse.redirect(
       new URL('/admin?success=Successfully connected to Microsoft Outlook!', request.url)
     );
   } catch (error: any) {
-    console.error('Callback error:', error);
+    console.error('[Callback] Callback error:', error);
     return NextResponse.redirect(
       new URL(`/admin?error=${encodeURIComponent(error.message || 'Failed to complete authentication')}`, request.url)
     );

@@ -28,13 +28,20 @@ const defaultMeetingTypes: Omit<MeetingType, 'id'>[] = [
 export async function getUserBySlugOrId(slugOrId: string): Promise<{ id: string; name: string; slug: string } | null> {
   noStore();
   
+  console.log(`[Storage] getUserBySlugOrId called with: ${slugOrId}`);
+  
   const result = await sql`
     SELECT id, name, slug FROM admin_users 
     WHERE slug = ${slugOrId} OR id::text = ${slugOrId}
     LIMIT 1
   `;
   
-  if (result.length === 0) return null;
+  if (result.length === 0) {
+    console.log(`[Storage] No user found for: ${slugOrId}`);
+    return null;
+  }
+  
+  console.log(`[Storage] Found user: id=${result[0].id}, name=${result[0].name}, slug=${result[0].slug}`);
   return { id: result[0].id, name: result[0].name, slug: result[0].slug };
 }
 

@@ -35,6 +35,8 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { user: userParam, date, time, duration, meetingType, clientName, clientEmail, notes } = body;
     
+    console.log(`[Booking] POST request received - user param: ${userParam}, date: ${date}, time: ${time}`);
+    
     if (!userParam) {
       return NextResponse.json(
         { success: false, error: 'User parameter required' },
@@ -45,11 +47,14 @@ export async function POST(request: NextRequest) {
     // Get user
     const user = await getUserBySlugOrId(userParam);
     if (!user) {
+      console.log(`[Booking] User not found for param: ${userParam}`);
       return NextResponse.json(
         { success: false, error: 'User not found' },
         { status: 404 }
       );
     }
+    
+    console.log(`[Booking] Found user: ${user.id} (${user.slug})`);
     
     // Validate required fields
     if (!date || !time || !duration || !meetingType || !clientName || !clientEmail) {
@@ -82,46 +87,61 @@ export async function POST(request: NextRequest) {
     
     // Create calendar event if Outlook is connected
     let outlookEventId: string | undefined;
-    if (await isConnected(user.id)) {
-      const [hours, minutes] = time.split(':').map(Number);
-      const endHours = hours + Math.floor((minutes + duration) / 60);
-      const endMinutes = (minutes + duration) % 60;
-      const endTime = `${endHours.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`;
+    try {
+      const isOutlookConnected = await isConnected(user.id);
+      console.log(`[Booking] User ${user.id} (${user.slug}) - Outlook connected: ${isOutlookConnected}`);
       
-      // Convert IANA timezone to Windows timezone for Microsoft Graph
-      const windowsTimezone = getWindowsTimezone(config.timezone);
-      
-      const event: OutlookEvent = {
-        subject: `${meetingType} with ${clientName}`,
-        body: {
-          contentType: 'HTML',
-          content: `<p>Meeting booked via ${config.businessName}</p><p><strong>Client:</strong> ${clientName} (${clientEmail})</p>${notes ? `<p><strong>Notes:</strong> ${notes}</p>` : ''}`,
-        },
-        start: {
-          dateTime: `${date}T${time}:00`,
-          timeZone: windowsTimezone,
-        },
-        end: {
-          dateTime: `${date}T${endTime}:00`,
-          timeZone: windowsTimezone,
-        },
-        attendees: [
-          {
-            emailAddress: {
-              address: clientEmail,
-              name: clientName,
-            },
-            type: 'required',
+      if (isOutlookConnected) {
+        const [hours, minutes] = time.split(':').map(Number);
+        const endHours = hours + Math.floor((minutes + duration) / 60);
+        const endMinutes = (minutes + duration) % 60;
+        const endTime = `${endHours.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`;
+        
+        // Convert IANA timezone to Windows timezone for Microsoft Graph
+        const windowsTimezone = getWindowsTimezone(config.timezone);
+        console.log(`[Booking] Creating calendar event - Timezone: ${config.timezone} -> ${windowsTimezone}`);
+        
+        const event: OutlookEvent = {
+          subject: `${meetingType} with ${clientName}`,
+          body: {
+            contentType: 'HTML',
+            content: `<p>Meeting booked via ${config.businessName}</p><p><strong>Client:</strong> ${clientName} (${clientEmail})</p>${notes ? `<p><strong>Notes:</strong> ${notes}</p>` : ''}`,
           },
-        ],
-        isOnlineMeeting: true,
-        onlineMeetingProvider: 'teamsForBusiness',
-      };
-      
-      const createdEvent = await createCalendarEvent(user.id, event);
-      if (createdEvent?.id) {
-        outlookEventId = createdEvent.id;
+          start: {
+            dateTime: `${date}T${time}:00`,
+            timeZone: windowsTimezone,
+          },
+          end: {
+            dateTime: `${date}T${endTime}:00`,
+            timeZone: windowsTimezone,
+          },
+          attendees: [
+            {
+              emailAddress: {
+                address: clientEmail,
+                name: clientName,
+              },
+              type: 'required',
+            },
+          ],
+          // Note: isOnlineMeeting requires Teams license, so we don't include it by default
+        };
+        
+        console.log(`[Booking] Event details:`, JSON.stringify({ subject: event.subject, start: event.start, end: event.end }));
+        
+        const createdEvent = await createCalendarEvent(user.id, event);
+        if (createdEvent?.id) {
+          outlookEventId = createdEvent.id;
+          console.log(`[Booking] Calendar event created: ${outlookEventId}`);
+        } else {
+          console.log(`[Booking] Failed to create calendar event - no event ID returned`);
+        }
+      } else {
+        console.log(`[Booking] Skipping calendar event - Outlook not connected for user ${user.id}`);
       }
+    } catch (calendarError: any) {
+      console.error(`[Booking] Calendar event creation error:`, calendarError.message || calendarError);
+      // Continue with booking even if calendar fails
     }
     
     // Save booking to database

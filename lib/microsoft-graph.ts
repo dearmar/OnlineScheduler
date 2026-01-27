@@ -85,6 +85,8 @@ export function getAuthorizationUrl(state: string): string {
 
 // Exchange authorization code for tokens
 export async function exchangeCodeForTokens(code: string, userId: string): Promise<MicrosoftTokens> {
+  console.log(`[Graph] exchangeCodeForTokens called for user ${userId}`);
+  
   const client = getMsalClient();
   
   const tokenRequest: AuthorizationCodeRequest = {
@@ -93,11 +95,14 @@ export async function exchangeCodeForTokens(code: string, userId: string): Promi
     redirectUri: process.env.MICROSOFT_REDIRECT_URI!,
   };
 
+  console.log(`[Graph] Requesting tokens with scopes: ${SCOPES.join(', ')}`);
   const response = await client.acquireTokenByCode(tokenRequest);
   
   if (!response) {
     throw new Error('Failed to acquire token');
   }
+
+  console.log(`[Graph] Token acquired, expires: ${response.expiresOn}`);
 
   const tokens: MicrosoftTokens = {
     accessToken: response.accessToken,
@@ -108,6 +113,8 @@ export async function exchangeCodeForTokens(code: string, userId: string): Promi
 
   // Store tokens for user
   await storeTokens(userId, tokens);
+  
+  console.log(`[Graph] Tokens stored for user ${userId}`);
 
   return tokens;
 }
@@ -152,6 +159,8 @@ export async function refreshAccessToken(userId: string): Promise<MicrosoftToken
 
 // Store tokens in database for user
 async function storeTokens(userId: string, tokens: MicrosoftTokens): Promise<void> {
+  console.log(`[Graph] storeTokens for user ${userId}, expires_at: ${tokens.expiresAt}`);
+  
   await sql`
     INSERT INTO microsoft_tokens (user_id, access_token, refresh_token, expires_at, scope)
     VALUES (${userId}::uuid, ${tokens.accessToken}, ${tokens.refreshToken}, ${tokens.expiresAt}, ${tokens.scope})
@@ -162,10 +171,14 @@ async function storeTokens(userId: string, tokens: MicrosoftTokens): Promise<voi
       scope = EXCLUDED.scope,
       updated_at = CURRENT_TIMESTAMP
   `;
+  
+  console.log(`[Graph] Tokens stored successfully for user ${userId}`);
 }
 
 // Get stored tokens from database for user
 export async function getStoredTokens(userId: string): Promise<MicrosoftTokens | null> {
+  console.log(`[Graph] getStoredTokens for user ${userId}`);
+  
   const result = await sql`
     SELECT access_token, refresh_token, expires_at, scope
     FROM microsoft_tokens
@@ -173,10 +186,13 @@ export async function getStoredTokens(userId: string): Promise<MicrosoftTokens |
   `;
 
   if (result.length === 0) {
+    console.log(`[Graph] No tokens found for user ${userId}`);
     return null;
   }
 
   const row = result[0];
+  console.log(`[Graph] Found tokens for user ${userId}, expires_at: ${row.expires_at}`);
+  
   return {
     accessToken: row.access_token,
     refreshToken: row.refresh_token,
@@ -195,15 +211,22 @@ export async function getValidAccessToken(userId: string): Promise<string | null
   let tokens = await getStoredTokens(userId);
 
   if (!tokens) {
+    console.log(`[Graph] getValidAccessToken: No tokens for user ${userId}`);
     return null;
   }
 
   // Check if token is expired or about to expire (5 min buffer)
-  if (tokens.expiresAt < Date.now() + 300000) {
+  const now = Date.now();
+  console.log(`[Graph] Token expires at ${tokens.expiresAt}, now is ${now}, diff: ${tokens.expiresAt - now}ms`);
+  
+  if (tokens.expiresAt < now + 300000) {
+    console.log(`[Graph] Token expired or expiring soon, refreshing...`);
     tokens = await refreshAccessToken(userId);
     if (!tokens) {
+      console.log(`[Graph] Token refresh failed for user ${userId}`);
       return null;
     }
+    console.log(`[Graph] Token refreshed successfully`);
   }
 
   return tokens.accessToken;
@@ -211,8 +234,11 @@ export async function getValidAccessToken(userId: string): Promise<string | null
 
 // Check if user is connected to Outlook
 export async function isConnected(userId: string): Promise<boolean> {
+  console.log(`[Graph] isConnected check for user ${userId}`);
   const tokens = await getStoredTokens(userId);
-  return !!tokens?.accessToken;
+  const connected = !!tokens?.accessToken;
+  console.log(`[Graph] isConnected result: ${connected}`);
+  return connected;
 }
 
 // Create Microsoft Graph client for user
@@ -248,23 +274,35 @@ export async function getUserProfile(userId: string): Promise<{ email: string; d
 
 // Create calendar event
 export async function createCalendarEvent(userId: string, event: OutlookEvent): Promise<OutlookEvent | null> {
+  console.log(`[Graph] createCalendarEvent called for user ${userId}`);
+  
   const accessToken = await getValidAccessToken(userId);
   
   if (!accessToken) {
-    console.log('No valid access token for user', userId);
+    console.log(`[Graph] No valid access token for user ${userId}`);
     return null;
   }
+  
+  console.log(`[Graph] Got valid access token, creating event...`);
 
   try {
     const client = createGraphClient(accessToken);
     const result = await client.api('/me/events').post(event);
     
+    console.log(`[Graph] Event created successfully: ${result.id}`);
+    
     return {
       ...event,
       id: result.id,
     };
-  } catch (error) {
-    console.error('Failed to create calendar event:', error);
+  } catch (error: any) {
+    console.error('[Graph] Failed to create calendar event:', error.message || error);
+    if (error.body) {
+      console.error('[Graph] Error body:', JSON.stringify(error.body));
+    }
+    if (error.statusCode) {
+      console.error('[Graph] Status code:', error.statusCode);
+    }
     return null;
   }
 }
