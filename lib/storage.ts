@@ -115,11 +115,10 @@ export async function getConfig(userId: string): Promise<SchedulerConfig> {
     ORDER BY sort_order ASC, created_at ASC
   `;
   
-  // Get booked slots - handle both old and new column names
+  // Get booked slots
   const bookedSlots = await sql`
     SELECT id, date, time, duration, meeting_type_name, client_name, client_email, client_phone,
-           notes, COALESCE(calendar_event_id, outlook_event_id) as calendar_event_id, 
-           location_type, location, created_at
+           notes, calendar_event_id, location_type, location, created_at
     FROM bookings
     WHERE user_id = ${userId}::uuid AND status = 'confirmed'
     ORDER BY date ASC, time ASC
