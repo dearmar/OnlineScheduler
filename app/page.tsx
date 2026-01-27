@@ -79,7 +79,7 @@ export default function BookingPage() {
 
   // Load config
   useEffect(() => {
-    fetch('/api/config')
+    fetch('/api/config', { cache: 'no-store' })
       .then(res => res.json())
       .then(data => {
         if (data.success) {

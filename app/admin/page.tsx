@@ -110,7 +110,7 @@ function AdminPageContent() {
 
   const loadConfig = async () => {
     try {
-      const response = await fetch('/api/config');
+      const response = await fetch('/api/config', { cache: 'no-store' });
       const data = await response.json();
       if (data.success) {
         setConfig(data.data);
