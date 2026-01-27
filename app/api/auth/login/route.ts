@@ -33,9 +33,11 @@ export async function POST(request: NextRequest) {
       success: true,
       data: {
         token: result.token,
+        mustResetPassword: result.mustResetPassword,
         user: {
           id: result.user.id,
           email: result.user.email,
+          name: result.user.name,
         },
       },
     });

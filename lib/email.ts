@@ -304,3 +304,145 @@ export async function sendCancellationEmail(booking: BookedSlot, config: Schedul
     html,
   });
 }
+
+// Send welcome email to new admin user with temporary password
+export async function sendNewUserEmail(
+  email: string,
+  name: string,
+  tempPassword: string,
+  config: SchedulerConfig
+): Promise<void> {
+  const loginUrl = process.env.NEXT_PUBLIC_APP_URL ? `${process.env.NEXT_PUBLIC_APP_URL}/admin` : '/admin';
+  
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to ${config.businessName}</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
+    <tr>
+      <td style="padding: 40px 30px; text-align: center; background: linear-gradient(135deg, ${config.primaryColor}, ${config.accentColor});">
+        ${config.logo ? `<img src="${config.logo}" alt="${config.businessName}" style="max-height: 50px; margin-bottom: 20px;">` : ''}
+        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">Welcome!</h1>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding: 40px 30px;">
+        <p style="color: #374151; font-size: 16px; line-height: 1.6; margin: 0 0 24px;">
+          Hi ${name},
+        </p>
+        <p style="color: #374151; font-size: 16px; line-height: 1.6; margin: 0 0 24px;">
+          You have been added as an administrator for <strong>${config.businessName}</strong>'s scheduling system.
+        </p>
+        
+        <div style="background-color: #f8fafc; border-radius: 12px; padding: 24px; margin: 24px 0;">
+          <p style="color: #6b7280; font-size: 14px; margin: 0 0 8px;">Your temporary password:</p>
+          <p style="color: ${config.accentColor}; font-size: 24px; font-weight: 600; font-family: monospace; margin: 0; letter-spacing: 2px;">${tempPassword}</p>
+        </div>
+        
+        <p style="color: #374151; font-size: 16px; line-height: 1.6; margin: 0 0 24px;">
+          For security reasons, you will be required to change this password when you first log in.
+        </p>
+        
+        <div style="text-align: center; margin: 32px 0;">
+          <a href="${loginUrl}" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, ${config.accentColor}, ${config.primaryColor}); color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600;">
+            Log In Now
+          </a>
+        </div>
+        
+        <p style="color: #9ca3af; font-size: 14px; line-height: 1.6; margin-top: 32px;">
+          If you didn't expect this email, please contact your administrator.
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding: 24px 30px; background-color: #f8fafc; text-align: center;">
+        <p style="color: #9ca3af; font-size: 12px; margin: 0;">
+          © ${new Date().getFullYear()} ${config.businessName}. All rights reserved.
+        </p>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `;
+
+  await getResendClient().emails.send({
+    from: `${config.businessName} <${getFromEmail()}>`,
+    to: email,
+    subject: `Welcome to ${config.businessName} - Your Admin Account`,
+    html,
+  });
+}
+
+// Send password reset email
+export async function sendPasswordResetEmail(
+  email: string,
+  name: string,
+  resetUrl: string,
+  config: SchedulerConfig
+): Promise<void> {
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Password Reset</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
+    <tr>
+      <td style="padding: 40px 30px; text-align: center; background: linear-gradient(135deg, ${config.primaryColor}, ${config.accentColor});">
+        ${config.logo ? `<img src="${config.logo}" alt="${config.businessName}" style="max-height: 50px; margin-bottom: 20px;">` : ''}
+        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">Password Reset</h1>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding: 40px 30px;">
+        <p style="color: #374151; font-size: 16px; line-height: 1.6; margin: 0 0 24px;">
+          Hi ${name},
+        </p>
+        <p style="color: #374151; font-size: 16px; line-height: 1.6; margin: 0 0 24px;">
+          We received a request to reset your password for your <strong>${config.businessName}</strong> admin account.
+        </p>
+        
+        <div style="text-align: center; margin: 32px 0;">
+          <a href="${resetUrl}" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, ${config.accentColor}, ${config.primaryColor}); color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600;">
+            Reset Password
+          </a>
+        </div>
+        
+        <p style="color: #6b7280; font-size: 14px; line-height: 1.6; margin: 24px 0;">
+          This link will expire in 24 hours. If you didn't request a password reset, you can safely ignore this email.
+        </p>
+        
+        <p style="color: #9ca3af; font-size: 12px; line-height: 1.6; margin-top: 32px;">
+          If the button doesn't work, copy and paste this link into your browser:<br>
+          <span style="color: #6b7280; word-break: break-all;">${resetUrl}</span>
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding: 24px 30px; background-color: #f8fafc; text-align: center;">
+        <p style="color: #9ca3af; font-size: 12px; margin: 0;">
+          © ${new Date().getFullYear()} ${config.businessName}. All rights reserved.
+        </p>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `;
+
+  await getResendClient().emails.send({
+    from: `${config.businessName} <${getFromEmail()}>`,
+    to: email,
+    subject: `Password Reset - ${config.businessName}`,
+    html,
+  });
+}

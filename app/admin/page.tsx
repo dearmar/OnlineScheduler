@@ -5,6 +5,16 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { SchedulerConfig, MeetingType } from '@/lib/types';
 
+// Admin User interface
+interface AdminUserDisplay {
+  id: string;
+  email: string;
+  name?: string;
+  mustResetPassword?: boolean;
+  createdAt: string;
+  lastLogin?: string;
+}
+
 // Icon Components
 const CalendarIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -58,6 +68,15 @@ const LogOutIcon = () => (
   </svg>
 );
 
+const UsersIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+    <circle cx="9" cy="7" r="4"/>
+    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+  </svg>
+);
+
 // Format time for display
 const formatTime = (hour: number, minute: number): string => {
   const period = hour >= 12 ? 'PM' : 'AM';
@@ -85,17 +104,33 @@ function AdminPageContent() {
   const [activeTab, setActiveTab] = useState('branding');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  
+  // Password reset states
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [forgotPasswordEmail, setForgotPasswordEmail] = useState('');
+  const [forgotPasswordSent, setForgotPasswordSent] = useState(false);
+  const [mustResetPassword, setMustResetPassword] = useState(false);
+  const [resetPasswordForm, setResetPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [resetToken, setResetToken] = useState<string | null>(null);
+  const [tokenResetForm, setTokenResetForm] = useState({ newPassword: '', confirmPassword: '' });
 
-  // Check for URL messages
+  // Check for URL params (reset token, messages)
   useEffect(() => {
     const success = searchParams.get('success');
     const error = searchParams.get('error');
+    const reset = searchParams.get('reset');
     if (success) showToast(success, 'success');
     if (error) showToast(error, 'error');
+    if (reset) {
+      setResetToken(reset);
+      setIsLoading(false);
+    }
   }, [searchParams]);
 
   // Check authentication on load
   useEffect(() => {
+    if (resetToken) return; // Skip auth check if handling reset token
+    
     fetch('/api/auth/verify')
       .then(res => res.json())
       .then(data => {
@@ -106,7 +141,7 @@ function AdminPageContent() {
       })
       .catch(() => {})
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [resetToken]);
 
   const loadConfig = async () => {
     try {
@@ -134,8 +169,14 @@ function AdminPageContent() {
       const data = await response.json();
       
       if (data.success) {
-        setIsAuthenticated(true);
-        loadConfig();
+        if (data.data.mustResetPassword) {
+          // User must reset their password
+          setMustResetPassword(true);
+          setResetPasswordForm({ ...resetPasswordForm, currentPassword: loginForm.password });
+        } else {
+          setIsAuthenticated(true);
+          loadConfig();
+        }
       } else {
         setLoginError(data.error || 'Login failed');
       }
@@ -145,10 +186,112 @@ function AdminPageContent() {
     }
   };
 
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+    
+    try {
+      const response = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotPasswordEmail }),
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setForgotPasswordSent(true);
+      } else {
+        setLoginError(data.error || 'Failed to send reset email');
+      }
+    } catch (error: any) {
+      setLoginError(error.message || 'An error occurred');
+    }
+  };
+
+  const handleForcePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+    
+    if (resetPasswordForm.newPassword !== resetPasswordForm.confirmPassword) {
+      setLoginError('Passwords do not match');
+      return;
+    }
+    
+    if (resetPasswordForm.newPassword.length < 8) {
+      setLoginError('Password must be at least 8 characters');
+      return;
+    }
+    
+    try {
+      const response = await fetch('/api/auth/set-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentPassword: resetPasswordForm.currentPassword,
+          newPassword: resetPasswordForm.newPassword,
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setMustResetPassword(false);
+        setIsAuthenticated(true);
+        loadConfig();
+        showToast('Password updated successfully!');
+      } else {
+        setLoginError(data.error || 'Failed to reset password');
+      }
+    } catch (error: any) {
+      setLoginError(error.message || 'An error occurred');
+    }
+  };
+
+  const handleTokenPasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+    
+    if (tokenResetForm.newPassword !== tokenResetForm.confirmPassword) {
+      setLoginError('Passwords do not match');
+      return;
+    }
+    
+    if (tokenResetForm.newPassword.length < 8) {
+      setLoginError('Password must be at least 8 characters');
+      return;
+    }
+    
+    try {
+      const response = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: resetToken,
+          newPassword: tokenResetForm.newPassword,
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setResetToken(null);
+        showToast('Password reset successfully! Please log in.');
+        // Clear URL params
+        window.history.replaceState({}, '', '/admin');
+      } else {
+        setLoginError(data.error || 'Failed to reset password');
+      }
+    } catch (error: any) {
+      setLoginError(error.message || 'An error occurred');
+    }
+  };
+
   const handleLogout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' });
     setIsAuthenticated(false);
     setConfig(null);
+    setMustResetPassword(false);
   };
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
@@ -187,8 +330,217 @@ function AdminPageContent() {
     );
   }
 
+  // Token-based Password Reset Screen (from email link)
+  if (resetToken) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 p-6">
+        <div className="w-full max-w-md">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mx-auto mb-4 text-white">
+              <CalendarIcon />
+            </div>
+            <h1 className="text-2xl font-bold text-white font-display">Reset Password</h1>
+            <p className="text-slate-400 mt-2">Enter your new password</p>
+          </div>
+          
+          <form onSubmit={handleTokenPasswordReset} className="bg-white/5 backdrop-blur-xl rounded-2xl p-8 border border-white/10">
+            {loginError && (
+              <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
+                {loginError}
+              </div>
+            )}
+            
+            <div className="space-y-5">
+              <div>
+                <label className="block text-slate-400 text-sm font-medium mb-2">New Password</label>
+                <input
+                  type="password"
+                  value={tokenResetForm.newPassword}
+                  onChange={(e) => setTokenResetForm({ ...tokenResetForm, newPassword: e.target.value })}
+                  className="w-full px-4 py-3.5 rounded-xl border border-white/15 bg-white/5 text-white placeholder-slate-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all outline-none"
+                  placeholder="••••••••"
+                  required
+                  minLength={8}
+                />
+              </div>
+              
+              <div>
+                <label className="block text-slate-400 text-sm font-medium mb-2">Confirm Password</label>
+                <input
+                  type="password"
+                  value={tokenResetForm.confirmPassword}
+                  onChange={(e) => setTokenResetForm({ ...tokenResetForm, confirmPassword: e.target.value })}
+                  className="w-full px-4 py-3.5 rounded-xl border border-white/15 bg-white/5 text-white placeholder-slate-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all outline-none"
+                  placeholder="••••••••"
+                  required
+                />
+              </div>
+              
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold hover:opacity-90 transition-opacity"
+              >
+                Reset Password
+              </button>
+            </div>
+          </form>
+          
+          <p className="text-center text-slate-500 text-sm mt-6">
+            <button onClick={() => { setResetToken(null); window.history.replaceState({}, '', '/admin'); }} className="text-indigo-400 hover:text-indigo-300">
+              ← Back to login
+            </button>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Force Password Reset Screen (after login with temp password)
+  if (mustResetPassword) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 p-6">
+        <div className="w-full max-w-md">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center mx-auto mb-4 text-white">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+            </div>
+            <h1 className="text-2xl font-bold text-white font-display">Set New Password</h1>
+            <p className="text-slate-400 mt-2">You must change your temporary password</p>
+          </div>
+          
+          <form onSubmit={handleForcePasswordReset} className="bg-white/5 backdrop-blur-xl rounded-2xl p-8 border border-white/10">
+            {loginError && (
+              <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
+                {loginError}
+              </div>
+            )}
+            
+            <div className="space-y-5">
+              <div>
+                <label className="block text-slate-400 text-sm font-medium mb-2">New Password</label>
+                <input
+                  type="password"
+                  value={resetPasswordForm.newPassword}
+                  onChange={(e) => setResetPasswordForm({ ...resetPasswordForm, newPassword: e.target.value })}
+                  className="w-full px-4 py-3.5 rounded-xl border border-white/15 bg-white/5 text-white placeholder-slate-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all outline-none"
+                  placeholder="Enter new password (min 8 characters)"
+                  required
+                  minLength={8}
+                />
+              </div>
+              
+              <div>
+                <label className="block text-slate-400 text-sm font-medium mb-2">Confirm Password</label>
+                <input
+                  type="password"
+                  value={resetPasswordForm.confirmPassword}
+                  onChange={(e) => setResetPasswordForm({ ...resetPasswordForm, confirmPassword: e.target.value })}
+                  className="w-full px-4 py-3.5 rounded-xl border border-white/15 bg-white/5 text-white placeholder-slate-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all outline-none"
+                  placeholder="Confirm new password"
+                  required
+                />
+              </div>
+              
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 text-white font-semibold hover:opacity-90 transition-opacity"
+              >
+                Set Password & Continue
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   // Login Screen
   if (!isAuthenticated) {
+    // Forgot Password Screen
+    if (showForgotPassword) {
+      if (forgotPasswordSent) {
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 p-6">
+            <div className="w-full max-w-md">
+              <div className="text-center mb-8">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center mx-auto mb-4 text-white">
+                  <MailIcon />
+                </div>
+                <h1 className="text-2xl font-bold text-white font-display">Check Your Email</h1>
+                <p className="text-slate-400 mt-2">We've sent password reset instructions to:</p>
+                <p className="text-indigo-400 mt-1 font-medium">{forgotPasswordEmail}</p>
+              </div>
+              
+              <div className="bg-white/5 backdrop-blur-xl rounded-2xl p-8 border border-white/10 text-center">
+                <p className="text-slate-400 text-sm mb-6">
+                  Click the link in the email to reset your password. The link expires in 24 hours.
+                </p>
+                <button
+                  onClick={() => { setShowForgotPassword(false); setForgotPasswordSent(false); setForgotPasswordEmail(''); }}
+                  className="text-indigo-400 hover:text-indigo-300 text-sm"
+                >
+                  ← Back to login
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+      
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 p-6">
+          <div className="w-full max-w-md">
+            <div className="text-center mb-8">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mx-auto mb-4 text-white">
+                <MailIcon />
+              </div>
+              <h1 className="text-2xl font-bold text-white font-display">Forgot Password</h1>
+              <p className="text-slate-400 mt-2">Enter your email to receive reset instructions</p>
+            </div>
+            
+            <form onSubmit={handleForgotPassword} className="bg-white/5 backdrop-blur-xl rounded-2xl p-8 border border-white/10">
+              {loginError && (
+                <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
+                  {loginError}
+                </div>
+              )}
+              
+              <div className="space-y-5">
+                <div>
+                  <label className="block text-slate-400 text-sm font-medium mb-2">Email Address</label>
+                  <input
+                    type="email"
+                    value={forgotPasswordEmail}
+                    onChange={(e) => setForgotPasswordEmail(e.target.value)}
+                    className="w-full px-4 py-3.5 rounded-xl border border-white/15 bg-white/5 text-white placeholder-slate-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all outline-none"
+                    placeholder="your@email.com"
+                    required
+                  />
+                </div>
+                
+                <button
+                  type="submit"
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold hover:opacity-90 transition-opacity"
+                >
+                  Send Reset Link
+                </button>
+              </div>
+            </form>
+            
+            <p className="text-center text-slate-500 text-sm mt-6">
+              <button onClick={() => { setShowForgotPassword(false); setLoginError(''); }} className="text-indigo-400 hover:text-indigo-300">
+                ← Back to login
+              </button>
+            </p>
+          </div>
+        </div>
+      );
+    }
+    
+    // Standard Login Screen
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 p-6">
         <div className="w-full max-w-md">
@@ -238,6 +590,14 @@ function AdminPageContent() {
               >
                 Sign In
               </button>
+              
+              <button
+                type="button"
+                onClick={() => { setShowForgotPassword(true); setLoginError(''); }}
+                className="w-full text-center text-slate-400 hover:text-indigo-400 text-sm transition-colors"
+              >
+                Forgot your password?
+              </button>
             </div>
           </form>
           
@@ -259,6 +619,7 @@ function AdminPageContent() {
     { id: 'calendar', label: 'Calendar', icon: '📅' },
     { id: 'meetings', label: 'Meeting Types', icon: '⏱' },
     { id: 'outlook', label: 'Outlook', icon: '📧' },
+    { id: 'users', label: 'Users', icon: '👥' },
   ];
 
   return (
@@ -340,6 +701,11 @@ function AdminPageContent() {
           {/* Outlook Tab */}
           {activeTab === 'outlook' && config && (
             <OutlookTab config={config} showToast={showToast} accentColor={accentColor} primaryColor={primaryColor} />
+          )}
+
+          {/* Users Tab */}
+          {activeTab === 'users' && (
+            <UsersTab showToast={showToast} accentColor={accentColor} primaryColor={primaryColor} />
           )}
         </div>
       </main>
@@ -797,6 +1163,270 @@ function OutlookTab({ config, showToast, accentColor, primaryColor }: {
             {isConnecting ? 'Connecting...' : 'Connect with Microsoft'}
           </button>
         </>
+      )}
+    </div>
+  );
+}
+
+// Users Tab Component
+function UsersTab({ showToast, accentColor, primaryColor }: {
+  showToast: (message: string, type: 'success' | 'error') => void;
+  accentColor: string;
+  primaryColor: string;
+}) {
+  const [users, setUsers] = useState<AdminUserDisplay[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newUser, setNewUser] = useState({ email: '', name: '' });
+  const [isAdding, setIsAdding] = useState(false);
+  const [lastCreatedUser, setLastCreatedUser] = useState<{ email: string; tempPassword: string } | null>(null);
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  const loadUsers = async () => {
+    try {
+      const response = await fetch('/api/admin/users', { cache: 'no-store' });
+      const data = await response.json();
+      if (data.success) {
+        setUsers(data.data);
+      }
+    } catch (error) {
+      console.error('Failed to load users:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleAddUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsAdding(true);
+    
+    try {
+      const response = await fetch('/api/admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newUser),
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setLastCreatedUser({ email: newUser.email, tempPassword: data.data.tempPassword });
+        setNewUser({ email: '', name: '' });
+        setShowAddForm(false);
+        loadUsers();
+        showToast('User created successfully!', 'success');
+      } else {
+        showToast(data.error || 'Failed to create user', 'error');
+      }
+    } catch (error: any) {
+      showToast(error.message || 'An error occurred', 'error');
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  const handleDeleteUser = async (userId: string, userEmail: string) => {
+    if (!confirm(`Are you sure you want to delete ${userEmail}? This cannot be undone.`)) {
+      return;
+    }
+    
+    try {
+      const response = await fetch(`/api/admin/users/${userId}`, {
+        method: 'DELETE',
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        loadUsers();
+        showToast('User deleted successfully', 'success');
+      } else {
+        showToast(data.error || 'Failed to delete user', 'error');
+      }
+    } catch (error: any) {
+      showToast(error.message || 'An error occurred', 'error');
+    }
+  };
+
+  const formatDate = (dateStr: string) => {
+    return new Date(dateStr).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="w-8 h-8 border-2 border-slate-700 border-t-indigo-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-white">Admin Users</h2>
+          <p className="text-slate-400 text-sm mt-1">Manage who can access the admin dashboard</p>
+        </div>
+        <button
+          onClick={() => setShowAddForm(true)}
+          className="px-5 py-2.5 rounded-xl text-white font-medium flex items-center gap-2 transition-all"
+          style={{
+            background: `linear-gradient(135deg, ${accentColor}, ${primaryColor})`,
+          }}
+        >
+          <PlusIcon /> Add User
+        </button>
+      </div>
+
+      {/* Temp Password Display */}
+      {lastCreatedUser && (
+        <div className="p-5 rounded-xl bg-amber-500/10 border border-amber-500/30">
+          <div className="flex items-start justify-between">
+            <div>
+              <h3 className="text-amber-400 font-semibold mb-2">Temporary Password Created</h3>
+              <p className="text-slate-300 text-sm mb-3">
+                Share this temporary password with <strong className="text-white">{lastCreatedUser.email}</strong>:
+              </p>
+              <div className="bg-slate-900/50 px-4 py-3 rounded-lg font-mono text-lg text-amber-400 tracking-wider">
+                {lastCreatedUser.tempPassword}
+              </div>
+              <p className="text-slate-400 text-xs mt-3">
+                The user will be required to change this password on first login. An email has also been sent with these instructions.
+              </p>
+            </div>
+            <button
+              onClick={() => setLastCreatedUser(null)}
+              className="text-slate-500 hover:text-white transition-colors"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="18" y1="6" x2="6" y2="18"/>
+                <line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Add User Form */}
+      {showAddForm && (
+        <div className="p-6 rounded-xl bg-white/5 border border-white/10">
+          <h3 className="text-lg font-semibold text-white mb-4">Add New Admin User</h3>
+          <form onSubmit={handleAddUser} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-slate-400 text-sm font-medium mb-2">Name</label>
+                <input
+                  type="text"
+                  value={newUser.name}
+                  onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border border-white/15 bg-white/5 text-white placeholder-slate-500 focus:border-indigo-500 transition-all outline-none"
+                  placeholder="John Doe"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-slate-400 text-sm font-medium mb-2">Email</label>
+                <input
+                  type="email"
+                  value={newUser.email}
+                  onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border border-white/15 bg-white/5 text-white placeholder-slate-500 focus:border-indigo-500 transition-all outline-none"
+                  placeholder="john@example.com"
+                  required
+                />
+              </div>
+            </div>
+            <p className="text-slate-400 text-sm">
+              A temporary password will be generated and emailed to the user. They will be required to change it on first login.
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="submit"
+                disabled={isAdding}
+                className="px-5 py-2.5 rounded-xl text-white font-medium transition-all disabled:opacity-50"
+                style={{ background: `linear-gradient(135deg, ${accentColor}, ${primaryColor})` }}
+              >
+                {isAdding ? 'Creating...' : 'Create User'}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowAddForm(false); setNewUser({ email: '', name: '' }); }}
+                className="px-5 py-2.5 rounded-xl border border-white/20 text-slate-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Users List */}
+      <div className="overflow-hidden rounded-xl border border-white/10">
+        <table className="w-full">
+          <thead className="bg-white/5">
+            <tr>
+              <th className="text-left text-slate-400 text-sm font-medium px-5 py-4">User</th>
+              <th className="text-left text-slate-400 text-sm font-medium px-5 py-4">Status</th>
+              <th className="text-left text-slate-400 text-sm font-medium px-5 py-4">Created</th>
+              <th className="text-left text-slate-400 text-sm font-medium px-5 py-4">Last Login</th>
+              <th className="text-right text-slate-400 text-sm font-medium px-5 py-4">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {users.map((user) => (
+              <tr key={user.id} className="hover:bg-white/3 transition-colors">
+                <td className="px-5 py-4">
+                  <div>
+                    <p className="text-white font-medium">{user.name || 'Admin'}</p>
+                    <p className="text-slate-400 text-sm">{user.email}</p>
+                  </div>
+                </td>
+                <td className="px-5 py-4">
+                  {user.mustResetPassword ? (
+                    <span className="px-3 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-400">
+                      Pending Reset
+                    </span>
+                  ) : (
+                    <span className="px-3 py-1 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-400">
+                      Active
+                    </span>
+                  )}
+                </td>
+                <td className="px-5 py-4 text-slate-400 text-sm">
+                  {formatDate(user.createdAt)}
+                </td>
+                <td className="px-5 py-4 text-slate-400 text-sm">
+                  {user.lastLogin ? formatDate(user.lastLogin) : 'Never'}
+                </td>
+                <td className="px-5 py-4 text-right">
+                  {users.length > 1 && (
+                    <button
+                      onClick={() => handleDeleteUser(user.id, user.email)}
+                      className="p-2 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                      title="Delete user"
+                    >
+                      <TrashIcon />
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {users.length === 0 && (
+        <div className="text-center py-12 text-slate-400">
+          No admin users found.
+        </div>
       )}
     </div>
   );

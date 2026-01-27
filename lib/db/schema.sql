@@ -7,7 +7,12 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TABLE IF NOT EXISTS admin_users (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   email VARCHAR(255) UNIQUE NOT NULL,
+  name VARCHAR(255),
   password_hash VARCHAR(255) NOT NULL,
+  must_reset_password BOOLEAN DEFAULT FALSE,
+  reset_token VARCHAR(64),
+  reset_token_expires TIMESTAMP WITH TIME ZONE,
+  created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   last_login TIMESTAMP WITH TIME ZONE
 );

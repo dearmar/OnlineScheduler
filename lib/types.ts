@@ -38,7 +38,12 @@ export interface SchedulerConfig {
 export interface AdminUser {
   id: string;
   email: string;
+  name?: string;
   passwordHash: string;
+  mustResetPassword?: boolean;
+  resetToken?: string;
+  resetTokenExpires?: string;
+  createdBy?: string;
   createdAt: string;
   lastLogin?: string;
 }
@@ -46,6 +51,7 @@ export interface AdminUser {
 export interface TokenPayload {
   userId: string;
   email: string;
+  mustResetPassword?: boolean;
   iat: number;
   exp: number;
 }

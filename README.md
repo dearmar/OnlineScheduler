@@ -15,6 +15,9 @@ A production-ready appointment scheduling application built with Next.js 14, des
 
 ### Admin Dashboard
 - **Secure Authentication**: JWT-based admin login with password protection
+- **Multi-User Support**: Add and manage multiple admin users
+- **Password Reset Flow**: Email-based password reset with temporary passwords
+- **Forced Password Change**: New users must set their own password on first login
 - **Branding Customization**: Business name, logo, and color scheme
 - **Calendar Settings**: Business hours and timezone configuration
 - **Meeting Type Management**: Create, edit, and delete meeting types with custom durations
@@ -163,7 +166,7 @@ The application uses the following PostgreSQL tables:
 
 ```sql
 -- Admin users for authentication
-admin_users (id, email, password_hash, created_at, last_login)
+admin_users (id, email, name, password_hash, must_reset_password, reset_token, reset_token_expires, created_by, created_at, last_login)
 
 -- Global scheduler configuration (single row)
 scheduler_config (business_name, logo, colors, hours, timezone, outlook_connected)
@@ -179,6 +182,22 @@ microsoft_tokens (access_token, refresh_token, expires_at, scope)
 
 -- External webhook subscriptions
 webhook_subscriptions (id, url, events, secret, is_active)
+```
+
+### Upgrading from Previous Versions
+
+If you have an existing installation, run the migration script in your Neon SQL Editor:
+
+```sql
+-- Add new columns for user management
+ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS name VARCHAR(255);
+ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS must_reset_password BOOLEAN DEFAULT FALSE;
+ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(64);
+ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMP WITH TIME ZONE;
+ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL;
+
+-- Update existing user to have a name
+UPDATE admin_users SET name = 'Admin' WHERE name IS NULL;
 ```
 
 ## Configuration
@@ -229,9 +248,15 @@ webhook_subscriptions (id, url, events, secret, is_active)
 | POST | `/api/auth/logout` | Admin logout |
 | GET | `/api/auth/verify` | Verify auth token |
 | POST | `/api/auth/change-password` | Change admin password |
+| POST | `/api/auth/forgot-password` | Request password reset email |
+| POST | `/api/auth/reset-password` | Reset password with token |
+| POST | `/api/auth/set-password` | Set new password (forced reset) |
 | PUT | `/api/config` | Update configuration |
 | GET | `/api/bookings` | List all bookings |
 | DELETE | `/api/bookings/[id]` | Cancel a booking |
+| GET | `/api/admin/users` | List all admin users |
+| POST | `/api/admin/users` | Create new admin user |
+| DELETE | `/api/admin/users/[id]` | Delete admin user |
 
 ### OAuth Endpoints
 
