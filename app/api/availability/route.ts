@@ -75,12 +75,24 @@ export async function GET(request: NextRequest) {
     const calendarProvider = config.calendarProvider || 'none';
     let busyTimes: Array<{ start: string; end: string }> = [];
     
+    console.log(`[Availability] Calendar sync check: ENABLE_CALENDAR_SYNC=${process.env.ENABLE_CALENDAR_SYNC}, provider=${calendarProvider}`);
+    
     if (process.env.ENABLE_CALENDAR_SYNC === 'true' && calendarProvider !== 'none') {
       try {
-        if (calendarProvider === 'outlook' && await isConnected(user.id)) {
-          busyTimes = await getFreeBusySchedule(user.id, date, date, config.timezone) || [];
-        } else if (calendarProvider === 'google' && await isGoogleConnected(user.id)) {
-          busyTimes = await getGoogleFreeBusySchedule(user.id, date, date, config.timezone) || [];
+        if (calendarProvider === 'outlook') {
+          const outlookConnected = await isConnected(user.id);
+          console.log(`[Availability] Outlook connected: ${outlookConnected}`);
+          if (outlookConnected) {
+            busyTimes = await getFreeBusySchedule(user.id, date, date, config.timezone) || [];
+            console.log(`[Availability] Outlook busy times found: ${busyTimes.length}`);
+          }
+        } else if (calendarProvider === 'google') {
+          const googleConnected = await isGoogleConnected(user.id);
+          console.log(`[Availability] Google connected: ${googleConnected}`);
+          if (googleConnected) {
+            busyTimes = await getGoogleFreeBusySchedule(user.id, date, date, config.timezone) || [];
+            console.log(`[Availability] Google busy times found: ${busyTimes.length}`);
+          }
         }
         
         if (busyTimes.length > 0) {

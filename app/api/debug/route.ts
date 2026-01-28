@@ -99,7 +99,71 @@ export async function GET(request: NextRequest) {
       });
     }
     
-    return NextResponse.json({ error: 'Unknown action. Use action=status, action=tokens, or action=test-update' });
+    if (action === 'calendar') {
+      if (!authUser) {
+        return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+      }
+      
+      // Check all calendar-related settings
+      const config = await getConfig(authUser.userId);
+      
+      // Check Microsoft tokens
+      const msTokens = await sql`
+        SELECT 
+          LENGTH(access_token) as access_token_length,
+          LENGTH(refresh_token) as refresh_token_length,
+          expires_at,
+          updated_at
+        FROM microsoft_tokens 
+        WHERE user_id = ${authUser.userId}::uuid
+      `;
+      
+      // Check Google tokens
+      const googleTokens = await sql`
+        SELECT 
+          LENGTH(access_token) as access_token_length,
+          LENGTH(refresh_token) as refresh_token_length,
+          expires_at,
+          updated_at
+        FROM google_tokens 
+        WHERE user_id = ${authUser.userId}::uuid
+      `;
+      
+      const now = Date.now();
+      
+      return NextResponse.json({
+        status: 'ok',
+        userId: authUser.userId,
+        calendarProvider: config.calendarProvider,
+        outlookEmail: config.outlookEmail,
+        outlookConnectedFlag: config.outlookConnected,
+        googleEmail: config.googleEmail,
+        googleConnectedFlag: config.googleConnected,
+        microsoftTokens: msTokens.length > 0 ? {
+          hasTokens: true,
+          accessTokenLength: msTokens[0].access_token_length,
+          refreshTokenLength: msTokens[0].refresh_token_length,
+          expiresAt: new Date(Number(msTokens[0].expires_at)).toISOString(),
+          isExpired: now > Number(msTokens[0].expires_at),
+          updatedAt: msTokens[0].updated_at
+        } : { hasTokens: false },
+        googleTokens: googleTokens.length > 0 ? {
+          hasTokens: true,
+          accessTokenLength: googleTokens[0].access_token_length,
+          refreshTokenLength: googleTokens[0].refresh_token_length,
+          expiresAt: new Date(Number(googleTokens[0].expires_at)).toISOString(),
+          isExpired: now > Number(googleTokens[0].expires_at),
+          updatedAt: googleTokens[0].updated_at
+        } : { hasTokens: false },
+        envVars: {
+          ENABLE_CALENDAR_SYNC: process.env.ENABLE_CALENDAR_SYNC,
+          hasOutlookClientId: !!process.env.MICROSOFT_CLIENT_ID,
+          hasGoogleClientId: !!process.env.GOOGLE_CLIENT_ID,
+        }
+      });
+    }
+    
+    return NextResponse.json({ error: 'Unknown action. Use action=status, action=tokens, action=calendar, or action=test-update' });
   } catch (error: any) {
     return NextResponse.json({
       status: 'error',
