@@ -53,7 +53,7 @@ export async function exchangeGoogleCodeForTokens(code: string, userId: string):
     throw new Error(data.error_description || data.error || 'Failed to exchange code for tokens');
   }
   
-  console.log(`[Google] Token exchange successful, has refresh_token: ${!!data.refresh_token}`);
+  console.log(`[Google] Token exchange successful, has refresh_token: ${!!data.refresh_token}, scope: ${data.scope}`);
 
   const tokens: GoogleTokens = {
     accessToken: data.access_token,
@@ -61,6 +61,11 @@ export async function exchangeGoogleCodeForTokens(code: string, userId: string):
     expiresAt: Date.now() + (data.expires_in * 1000),
     scope: data.scope,
   };
+
+  // Check if calendar scope was granted
+  if (!data.scope?.includes('calendar')) {
+    console.error(`[Google] WARNING: Calendar scope not granted! Got: ${data.scope}`);
+  }
 
   if (!tokens.refreshToken) {
     console.warn(`[Google] WARNING: No refresh token received!`);
@@ -172,13 +177,18 @@ export async function getValidGoogleAccessToken(userId: string): Promise<string 
   let tokens = await getStoredGoogleTokens(userId);
 
   if (!tokens) {
+    console.log(`[Google] No tokens found for user ${userId}`);
     return null;
   }
 
+  console.log(`[Google] Token scope: ${tokens.scope}`);
+  
   // Check if token is expired or about to expire (5 min buffer)
   if (tokens.expiresAt < Date.now() + 300000) {
+    console.log(`[Google] Token expired, refreshing...`);
     tokens = await refreshGoogleAccessToken(userId);
     if (!tokens) {
+      console.log(`[Google] Token refresh failed`);
       return null;
     }
   }
@@ -189,7 +199,9 @@ export async function getValidGoogleAccessToken(userId: string): Promise<string 
 // Check if user is connected to Google
 export async function isGoogleConnected(userId: string): Promise<boolean> {
   const tokens = await getStoredGoogleTokens(userId);
-  return !!tokens?.accessToken;
+  const connected = !!tokens?.accessToken;
+  console.log(`[Google] isConnected for user ${userId}: ${connected}, scope: ${tokens?.scope || 'none'}`);
+  return connected;
 }
 
 // Get user profile
@@ -323,6 +335,8 @@ export async function getGoogleFreeBusySchedule(
   }
 
   try {
+    console.log(`[Google] Getting free/busy for ${startDate} to ${endDate}, timezone: ${timezone}`);
+    
     const response = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
       method: 'POST',
       headers: {
@@ -338,12 +352,15 @@ export async function getGoogleFreeBusySchedule(
     });
     
     if (!response.ok) {
-      console.error('[Google] Failed to get free/busy schedule');
+      const errorText = await response.text();
+      console.error('[Google] Failed to get free/busy schedule:', response.status, errorText);
       return null;
     }
     
     const data = await response.json();
     const busySlots = data.calendars?.primary?.busy || [];
+    
+    console.log(`[Google] Found ${busySlots.length} busy slots`);
     
     return busySlots.map((slot: any) => ({
       start: slot.start,

@@ -124,6 +124,7 @@ export async function GET(request: NextRequest) {
           LENGTH(access_token) as access_token_length,
           LENGTH(refresh_token) as refresh_token_length,
           expires_at,
+          scope,
           updated_at
         FROM google_tokens 
         WHERE user_id = ${authUser.userId}::uuid
@@ -153,6 +154,8 @@ export async function GET(request: NextRequest) {
           refreshTokenLength: googleTokens[0].refresh_token_length,
           expiresAt: new Date(Number(googleTokens[0].expires_at)).toISOString(),
           isExpired: now > Number(googleTokens[0].expires_at),
+          scope: googleTokens[0].scope,
+          hasCalendarScope: googleTokens[0].scope?.includes('calendar') || false,
           updatedAt: googleTokens[0].updated_at
         } : { hasTokens: false },
         envVars: {
