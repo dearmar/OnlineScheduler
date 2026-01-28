@@ -32,6 +32,8 @@ export async function GET(request: NextRequest) {
     const date = searchParams.get('date');
     const duration = parseInt(searchParams.get('duration') || '30', 10);
     
+    console.log(`[Availability] Checking for user=${userParam}, date=${date}, duration=${duration}`);
+    
     if (!userParam) {
       return NextResponse.json(
         { success: false, error: 'User parameter required' },

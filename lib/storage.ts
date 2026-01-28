@@ -411,6 +411,8 @@ export async function getAvailableSlots(userId: string, date: string, duration: 
   const endHour = dayAvailability?.endHour ?? config.endHour;
   const isEnabled = dayAvailability?.enabled ?? true;
   
+  console.log(`[Storage] getAvailableSlots: date=${date}, duration=${duration}, day=${dayName}, hours=${startHour}-${endHour}, enabled=${isEnabled}`);
+  
   // If day is not enabled, return empty slots
   if (!isEnabled) {
     return [];
@@ -429,6 +431,7 @@ export async function getAvailableSlots(userId: string, date: string, duration: 
     }
   }
   
+  console.log(`[Storage] Generated ${slots.length} slots for duration=${duration}`);
   return slots;
 }
 

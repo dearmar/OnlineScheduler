@@ -393,6 +393,8 @@ export default function BookingPage() {
                   key={mt.id}
                   onClick={() => {
                     setSelectedMeeting(mt);
+                    setSelectedTime(null); // Clear selected time when meeting changes
+                    setAvailableSlots([]); // Clear slots to force refetch with new duration
                     setStep(2);
                   }}
                   className="p-6 rounded-2xl bg-white border-2 border-transparent cursor-pointer flex items-center gap-5 shadow-md hover:shadow-lg transition-all card-hover animate-slide-up"
@@ -500,7 +502,12 @@ export default function BookingPage() {
                     days.push(
                       <button
                         key={day}
-                        onClick={() => !isDisabled && setSelectedDate(date)}
+                        onClick={() => {
+                          if (!isDisabled) {
+                            setSelectedDate(date);
+                            setSelectedTime(null); // Clear time when date changes
+                          }
+                        }}
                         disabled={isDisabled}
                         className="aspect-square rounded-lg font-medium transition-all"
                         style={{
