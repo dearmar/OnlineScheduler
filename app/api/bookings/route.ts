@@ -107,6 +107,7 @@ export async function POST(request: NextRequest) {
     
     // Get config for calendar event and emails
     const config = await getConfig(user.id);
+    console.log(`[Booking] Config loaded: calendarProvider=${config.calendarProvider}`);
     
     // Build location string for calendar event
     let eventLocation = '';
@@ -126,7 +127,10 @@ export async function POST(request: NextRequest) {
       const endMinutes = (minutes + duration) % 60;
       const endTime = `${endHours.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`;
       
-      if (config.calendarProvider === 'outlook' && await isConnected(user.id)) {
+      const outlookConnected = await isConnected(user.id);
+      console.log(`[Booking] Outlook connected check: ${outlookConnected}`);
+      
+      if (config.calendarProvider === 'outlook' && outlookConnected) {
         console.log(`[Booking] Creating Outlook calendar event`);
         
         const windowsTimezone = getWindowsTimezone(config.timezone);

@@ -96,23 +96,29 @@ export async function GET(request: NextRequest) {
         }
         
         if (busyTimes.length > 0) {
+          console.log(`[Availability] Busy times:`, JSON.stringify(busyTimes));
+          
           slots = slots.filter(slot => {
             const [hours, minutes] = slot.split(':').map(Number);
             const slotStart = hours * 60 + minutes;
             const slotEnd = slotStart + duration;
             
             for (const busy of busyTimes) {
-              const busyStartLocal = utcToLocalTime(busy.start, config.timezone);
-              const busyEndLocal = utcToLocalTime(busy.end, config.timezone);
+              // Times from Outlook/Google are already in local timezone (we request them that way)
+              // Format is like "2026-01-28T09:00:00.0000000" - extract just the time part
+              const busyStartTime = busy.start.split('T')[1]?.substring(0, 5) || '00:00';
+              const busyEndTime = busy.end.split('T')[1]?.substring(0, 5) || '00:00';
               
-              const [busyStartHours, busyStartMins] = busyStartLocal.split(':').map(Number);
-              const [busyEndHours, busyEndMins] = busyEndLocal.split(':').map(Number);
+              const [busyStartHours, busyStartMins] = busyStartTime.split(':').map(Number);
+              const [busyEndHours, busyEndMins] = busyEndTime.split(':').map(Number);
               const busyStart = busyStartHours * 60 + busyStartMins;
               const busyEnd = busyEndHours * 60 + busyEndMins;
               
+              // Check if slot overlaps with busy time
               if ((slotStart >= busyStart && slotStart < busyEnd) ||
                   (slotEnd > busyStart && slotEnd <= busyEnd) ||
                   (slotStart <= busyStart && slotEnd >= busyEnd)) {
+                console.log(`[Availability] Slot ${slot} blocked by busy time ${busyStartTime}-${busyEndTime}`);
                 return false;
               }
             }
