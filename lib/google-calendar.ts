@@ -21,7 +21,10 @@ export function getGoogleAuthorizationUrl(state: string): string {
     state,
   });
 
-  return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+  console.log(`[Google] Authorization URL scopes: ${SCOPES.join(' ')}`);
+  console.log(`[Google] Full auth URL: ${url}`);
+  return url;
 }
 
 // Exchange authorization code for tokens
