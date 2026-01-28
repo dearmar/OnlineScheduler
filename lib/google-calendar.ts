@@ -51,6 +51,14 @@ export async function exchangeGoogleCodeForTokens(code: string, userId: string):
   
   const data = await response.json();
   
+  console.log(`[Google] Raw token response:`, JSON.stringify({
+    hasAccessToken: !!data.access_token,
+    hasRefreshToken: !!data.refresh_token,
+    expiresIn: data.expires_in,
+    scope: data.scope,
+    tokenType: data.token_type,
+  }));
+  
   if (!response.ok) {
     console.error(`[Google] Token exchange failed:`, data);
     throw new Error(data.error_description || data.error || 'Failed to exchange code for tokens');

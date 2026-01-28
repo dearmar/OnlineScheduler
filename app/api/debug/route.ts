@@ -135,6 +135,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         status: 'ok',
         userId: authUser.userId,
+        timezone: config.timezone,
         calendarProvider: config.calendarProvider,
         outlookEmail: config.outlookEmail,
         outlookConnectedFlag: config.outlookConnected,

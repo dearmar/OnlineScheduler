@@ -168,6 +168,7 @@ export async function POST(request: NextRequest) {
         }
       } else if (config.calendarProvider === 'google' && await isGoogleConnected(user.id)) {
         console.log(`[Booking] Creating Google calendar event`);
+        console.log(`[Booking] Event time: ${date}T${time}:00, timezone: ${config.timezone}`);
         
         const event: GoogleCalendarEvent = {
           summary: `${meetingType} with ${clientName}`,
